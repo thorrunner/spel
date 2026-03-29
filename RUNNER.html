@@ -139,6 +139,7 @@
       legPhase: 0,
       sliding: false,
       slideTimer: 0,
+      dashAvailable: true,
     };
 
     // ---- Obstacles ----
@@ -158,18 +159,37 @@
 
     // ---- Shop / persistent upgrades ----
     let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
-    let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{"tripleJump":false,"extraHeart":false,"longSlide":false}');
+    let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
     let shopSelection = 0;
-    let shopReturnState = 'start'; // which state to return to when leaving shop
+    let shopReturnState = 'start';
+
+    // Skins
+    let activeSkin = localStorage.getItem('runner_activeSkin') || 'default';
+    let ownedSkins = JSON.parse(localStorage.getItem('runner_ownedSkins') || '["default"]');
+
+    const SKINS = {
+      default: { body: '#a8dadc', visor: '#57b8e8', visorBg: '#1a1a2e', legs: '#7bbfbf', jump: '#a8dadc' },
+      fire:    { body: '#ff6b35', visor: '#ffdd44', visorBg: '#3a0808', legs: '#cc4422', jump: '#ff6b35' },
+      neon:    { body: '#39ff14', visor: '#ff00ff', visorBg: '#0a002e', legs: '#00cc44', jump: '#39ff14' },
+    };
+    function getSkin() { return SKINS[activeSkin] || SKINS.default; }
 
     const SHOP_ITEMS = [
-      { key: 'tripleJump', name: 'TRIPLE JUMP', desc: '3 jumps instead of 2',           cost: 3, color: '#a8dadc' },
-      { key: 'extraHeart', name: 'EXTRA HEART', desc: 'Start with 4 lives',             cost: 2, color: '#ff6b8a' },
-      { key: 'longSlide',  name: 'LONG SLIDE',  desc: 'Longer slide, cancel by jumping', cost: 2, color: '#f5a623' },
+      { key: 'tripleJump',    name: 'TRIPLE JUMP',    desc: '3 jumps instead of 2',            cost: 3, color: '#a8dadc' },
+      { key: 'extraHeart',    name: 'EXTRA HEART',    desc: 'Start with 4 lives',              cost: 2, color: '#ff6b8a' },
+      { key: 'longSlide',     name: 'LONG SLIDE',     desc: 'Longer slide, cancel by jumping',  cost: 2, color: '#f5a623' },
+      { key: 'coinMagnet',    name: 'COIN MAGNET',    desc: 'Pull nearby coins toward you',     cost: 3, color: '#ffe066' },
+      { key: 'diamondMagnet', name: 'GEM MAGNET',     desc: 'Pull nearby diamonds toward you',  cost: 2, color: '#40c9a2' },
+      { key: 'airDash',       name: 'AIR DASH',       desc: 'Press RIGHT while airborne',       cost: 3, color: '#7ee8fa' },
+      { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 2, color: '#e94560' },
+      { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 2, color: '#ff6b35', type: 'skin' },
+      { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 2, color: '#39ff14', type: 'skin' },
     ];
 
     function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
     function saveUpgrades() { localStorage.setItem('runner_upgrades', JSON.stringify(upgrades)); }
+    function saveActiveSkin() { localStorage.setItem('runner_activeSkin', activeSkin); }
+    function saveOwnedSkins() { localStorage.setItem('runner_ownedSkins', JSON.stringify(ownedSkins)); }
 
     // ---- Stars (background) ----
     function initStars() {
@@ -264,6 +284,7 @@
       player.legPhase = 0;
       player.sliding = false;
       player.slideTimer = 0;
+      player.dashAvailable = true;
     }
 
     // ---- Jump ----
@@ -279,7 +300,7 @@
       if (player.jumpsLeft > 0) {
         player.vy = -13;
         player.jumpsLeft--;
-        spawnParticles(player.x + player.w / 2, player.y + player.h, '#a8dadc', 6);
+        spawnParticles(player.x + player.w / 2, player.y + player.h, getSkin().jump, 6);
       }
     }
 
@@ -300,6 +321,15 @@
       player.y = GROUND;
     }
 
+    // ---- Air dash ----
+    function airDash() {
+      if (state !== 'running' || !upgrades.airDash) return;
+      if (player.onGround || player.sliding || !player.dashAvailable) return;
+      player.dashAvailable = false;
+      player.x += 120;
+      spawnParticles(player.x - 60, player.y + player.h / 2, getSkin().jump, 12);
+    }
+
     // ---- Input ----
     document.addEventListener('keydown', e => {
       // Open shop from start or dead screen
@@ -313,18 +343,33 @@
         if (e.code === 'ArrowDown') shopSelection = (shopSelection + 1) % SHOP_ITEMS.length;
         if (e.code === 'Space' || e.code === 'Enter') {
           const item = SHOP_ITEMS[shopSelection];
-          if (!upgrades[item.key] && totalDiamonds >= item.cost) {
-            totalDiamonds -= item.cost;
-            upgrades[item.key] = true;
-            saveDiamonds();
-            saveUpgrades();
+          if (item.type === 'skin') {
+            if (ownedSkins.includes(item.key)) {
+              activeSkin = item.key;
+              saveActiveSkin();
+            } else if (totalDiamonds >= item.cost) {
+              totalDiamonds -= item.cost;
+              ownedSkins.push(item.key);
+              activeSkin = item.key;
+              saveDiamonds();
+              saveOwnedSkins();
+              saveActiveSkin();
+            }
+          } else {
+            if (!upgrades[item.key] && totalDiamonds >= item.cost) {
+              totalDiamonds -= item.cost;
+              upgrades[item.key] = true;
+              saveDiamonds();
+              saveUpgrades();
+            }
           }
         }
         if (e.code === 'Escape' || e.code === 'KeyS') state = shopReturnState;
         return;
       }
-      if (e.code === 'ArrowUp')   { e.preventDefault(); jump(); }
-      if (e.code === 'ArrowDown') { e.preventDefault(); startSlide(); }
+      if (e.code === 'ArrowUp')    { e.preventDefault(); jump(); }
+      if (e.code === 'ArrowDown')  { e.preventDefault(); startSlide(); }
+      if (e.code === 'ArrowRight') { e.preventDefault(); airDash(); }
       if (e.code === 'Space') {
         e.preventDefault();
         if (state === 'start' || state === 'dead') jump();
@@ -443,6 +488,7 @@
       const pw = player.w;
       const ph = player.h;
       const sliding = player.sliding;
+      const skin = getSkin();
 
       ctx.save();
       // Anchor at bottom of player (moves up when jumping)
@@ -457,14 +503,14 @@
         ctx.ellipse(0, 2, sw * 0.6, 4, 0, 0, Math.PI * 2);
         ctx.fill();
         // Body (flat)
-        ctx.fillStyle = COL.player;
+        ctx.fillStyle = skin.body;
         roundRect(-sw / 2, -sh, sw, sh - 4, 5);
         ctx.fill();
         // Visor (side-facing)
-        ctx.fillStyle = '#1a1a2e';
+        ctx.fillStyle = skin.visorBg;
         roundRect(sw / 2 - 12, -sh + 3, 10, sh - 10, 3);
         ctx.fill();
-        ctx.fillStyle = '#57b8e8';
+        ctx.fillStyle = skin.visor;
         roundRect(sw / 2 - 11, -sh + 5, 8, sh - 14, 2);
         ctx.fill();
       } else {
@@ -478,7 +524,7 @@
         ctx.fill();
 
         // Legs
-        ctx.strokeStyle = '#7bbfbf';
+        ctx.strokeStyle = skin.legs;
         ctx.lineWidth = 5;
         ctx.lineCap = 'round';
         if (player.onGround) {
@@ -491,15 +537,15 @@
         }
 
         // Body
-        ctx.fillStyle = COL.player;
+        ctx.fillStyle = skin.body;
         roundRect(-pw / 2, -ph, pw, ph - 12, 6);
         ctx.fill();
 
         // Visor
-        ctx.fillStyle = '#1a1a2e';
+        ctx.fillStyle = skin.visorBg;
         roundRect(-pw / 2 + 4, -ph + 6, pw - 8, 14, 4);
         ctx.fill();
-        ctx.fillStyle = '#57b8e8';
+        ctx.fillStyle = skin.visor;
         roundRect(-pw / 2 + 6, -ph + 8, pw - 12, 10, 3);
         ctx.fill();
       }
@@ -839,15 +885,22 @@
       if (!player.sliding) {
         player.vy += 0.6;
         player.y += player.vy;
-        const groundY = GROUND; // top of player when standing on ground
+        const groundY = GROUND;
         if (player.y >= groundY) {
           player.y = groundY;
           player.vy = 0;
           player.onGround = true;
           player.jumpsLeft = upgrades.tripleJump ? 3 : 2;
+          player.dashAvailable = true;
         } else {
           player.onGround = false;
         }
+      }
+
+      // Air dash ease-back
+      if (player.x > 100) {
+        player.x += (100 - player.x) * 0.06;
+        if (Math.abs(player.x - 100) < 0.5) player.x = 100;
       }
 
       // Leg / dust animation
@@ -856,6 +909,20 @@
         if (frame % 3 === 0) spawnDustParticle();
       } else if (player.sliding) {
         if (frame % 4 === 0) spawnDustParticle();
+      }
+
+      // Trail effect
+      if (upgrades.trail && frame % 2 === 0) {
+        const sk = getSkin();
+        particles.push({
+          x: player.x + 2,
+          y: player.y + player.h * 0.3 + Math.random() * player.h * 0.4,
+          vx: -speed * 0.5 - Math.random() * 2,
+          vy: (Math.random() - 0.5) * 1.5,
+          life: 1, decay: 0.04,
+          r: Math.random() * 3 + 1.5,
+          color: sk.body,
+        });
       }
 
       // Level-up check
@@ -887,7 +954,7 @@
         const playerHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
         if (invincible <= 0 && collides(playerHitbox, obHitbox)) {
           lives--;
-          spawnParticles(player.x + player.w / 2, player.y + player.h / 2, COL.player, 16);
+          spawnParticles(player.x + player.w / 2, player.y + player.h / 2, getSkin().body, 16);
           spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 8);
           if (lives <= 0) {
             state = 'dead';
@@ -912,6 +979,17 @@
         const c = coins[i];
         c.x -= speed;
         if (c.x + c.r < 0) { coins.splice(i, 1); continue; }
+        // Coin magnet
+        if (upgrades.coinMagnet) {
+          const px = player.x + player.w / 2, py = player.y + player.h / 2;
+          const dx = px - c.x, dy = py - c.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 100 && dist > 0) {
+            const pull = (100 - dist) / 100 * 4;
+            c.x += (dx / dist) * pull;
+            c.y += (dy / dist) * pull;
+          }
+        }
         // Collection check — use coin circle vs player box
         const bob = Math.sin(frame * 0.07 + c.phase) * 3;
         const cy = c.y + bob;
@@ -949,6 +1027,17 @@
         const d = diamonds[i];
         d.x -= speed;
         if (d.x + d.r < 0) { diamonds.splice(i, 1); continue; }
+        // Diamond magnet
+        if (upgrades.diamondMagnet) {
+          const px = player.x + player.w / 2, py = player.y + player.h / 2;
+          const dx = px - d.x, dy = py - d.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120 && dist > 0) {
+            const pull = (120 - dist) / 120 * 5;
+            d.x += (dx / dist) * pull;
+            d.y += (dy / dist) * pull;
+          }
+        }
         // Collection check
         const bob = Math.sin(frame * 0.05 + d.phase) * 4;
         const dy = d.y + bob;
@@ -1221,63 +1310,78 @@
         ctx.textAlign = 'center';
 
         // Title
-        ctx.shadowColor = '#40c9a2';
-        ctx.shadowBlur = 16;
+        ctx.shadowColor = '#40c9a2'; ctx.shadowBlur = 16;
         ctx.fillStyle = '#40c9a2';
-        ctx.font = 'bold 36px Courier New';
-        ctx.fillText('SHOP', W / 2, 38);
+        ctx.font = 'bold 34px Courier New';
+        ctx.fillText('SHOP', W / 2, 36);
         ctx.shadowBlur = 0;
 
         // Diamond balance
         ctx.fillStyle = '#40c9a2';
-        ctx.font = '15px Courier New';
-        ctx.fillText('\u25C6 ' + totalDiamonds + ' diamonds', W / 2, 60);
+        ctx.font = '14px Courier New';
+        ctx.fillText('\u25C6 ' + totalDiamonds + ' diamonds', W / 2, 56);
 
-        // Items
-        for (let i = 0; i < SHOP_ITEMS.length; i++) {
-          const item = SHOP_ITEMS[i];
-          const y = 100 + i * 62;
-          const selected = i === shopSelection;
-          const owned = upgrades[item.key];
+        // Scrollable item list
+        const visCount = 6;
+        let scrollOff = Math.max(0, Math.min(shopSelection - 2, SHOP_ITEMS.length - visCount));
+        if (scrollOff < 0) scrollOff = 0;
 
-          // Selection box
+        for (let vi = 0; vi < visCount && scrollOff + vi < SHOP_ITEMS.length; vi++) {
+          const idx = scrollOff + vi;
+          const item = SHOP_ITEMS[idx];
+          const y = 80 + vi * 28;
+          const selected = idx === shopSelection;
+          const isSkin = item.type === 'skin';
+          const owned = isSkin ? ownedSkins.includes(item.key) : upgrades[item.key];
+          const isActive = isSkin && activeSkin === item.key;
+
+          // Selection highlight
           if (selected) {
             ctx.fillStyle = 'rgba(255,255,255,0.06)';
-            roundRect(W / 2 - 220, y - 16, 440, 52, 6);
-            ctx.fill();
-            ctx.strokeStyle = item.color;
-            ctx.lineWidth = 2;
-            roundRect(W / 2 - 220, y - 16, 440, 52, 6);
-            ctx.stroke();
+            roundRect(W / 2 - 230, y - 11, 460, 24, 4); ctx.fill();
+            ctx.strokeStyle = item.color; ctx.lineWidth = 1.5;
+            roundRect(W / 2 - 230, y - 11, 460, 24, 4); ctx.stroke();
           }
 
           // Item name
-          ctx.fillStyle = owned ? '#556' : item.color;
-          ctx.font = 'bold 18px Courier New';
-          ctx.fillText(item.name, W / 2 - 30, y + 6);
+          ctx.fillStyle = (owned && !isSkin) || isActive ? '#667' : item.color;
+          ctx.font = (selected ? 'bold ' : '') + '14px Courier New';
+          ctx.fillText(item.name, W / 2 - 40, y + 4);
 
-          // Description
-          ctx.fillStyle = owned ? '#445' : '#888';
-          ctx.font = '12px Courier New';
-          ctx.fillText(item.desc, W / 2 - 30, y + 24);
-
-          // Price or OWNED badge
-          if (owned) {
-            ctx.fillStyle = '#40c9a2';
-            ctx.font = 'bold 14px Courier New';
-            ctx.fillText('OWNED', W / 2 + 180, y + 12);
+          // Status / price
+          if (isActive) {
+            ctx.fillStyle = '#40c9a2'; ctx.font = 'bold 12px Courier New';
+            ctx.fillText('ACTIVE', W / 2 + 185, y + 4);
+          } else if (owned && isSkin) {
+            ctx.fillStyle = '#888'; ctx.font = '12px Courier New';
+            ctx.fillText('EQUIP', W / 2 + 185, y + 4);
+          } else if (owned) {
+            ctx.fillStyle = '#40c9a2'; ctx.font = 'bold 12px Courier New';
+            ctx.fillText('OWNED', W / 2 + 185, y + 4);
           } else {
-            const canAfford = totalDiamonds >= item.cost;
-            ctx.fillStyle = canAfford ? '#40c9a2' : '#664444';
-            ctx.font = 'bold 14px Courier New';
-            ctx.fillText('\u25C6 ' + item.cost, W / 2 + 180, y + 12);
+            ctx.fillStyle = totalDiamonds >= item.cost ? '#40c9a2' : '#664444';
+            ctx.font = 'bold 12px Courier New';
+            ctx.fillText('\u25C6 ' + item.cost, W / 2 + 185, y + 4);
           }
         }
 
+        // Scroll arrows
+        if (scrollOff > 0) {
+          ctx.fillStyle = '#555'; ctx.font = '12px Courier New';
+          ctx.fillText('\u25B2', W / 2, 70);
+        }
+        if (scrollOff + visCount < SHOP_ITEMS.length) {
+          ctx.fillStyle = '#555'; ctx.font = '12px Courier New';
+          ctx.fillText('\u25BC', W / 2, 80 + visCount * 28 + 4);
+        }
+
+        // Selected item description
+        ctx.fillStyle = '#888'; ctx.font = '13px Courier New';
+        ctx.fillText(SHOP_ITEMS[shopSelection].desc, W / 2, 260);
+
         // Instructions
-        ctx.fillStyle = '#555';
-        ctx.font = '13px Courier New';
-        ctx.fillText('\u2191\u2193 select  \u2022  SPACE buy  \u2022  ESC back', W / 2, H - 16);
+        ctx.fillStyle = '#555'; ctx.font = '12px Courier New';
+        ctx.fillText('\u2191\u2193 select  \u2022  SPACE buy  \u2022  ESC back', W / 2, H - 12);
         ctx.textAlign = 'left';
       }
 
