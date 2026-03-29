@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runner</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #eee;
+      user-select: none;
+    }
+    canvas {
+      border: 2px solid #e94560;
+      border-radius: 4px;
+      display: block;
+    }
+    #ui {
+      width: 800px;
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 4px;
+      font-size: 14px;
+      color: #aaa;
+    }
+    #score-display { color: #e94560; font-weight: bold; font-size: 16px; }
+    #hi-display { color: #f5a623; }
+    #coin-display { color: #ffe066; font-weight: bold; font-size: 16px; }
+    #lives-display { color: #ff6b8a; font-weight: bold; font-size: 16px; letter-spacing: 3px; }
+    #level-display  { color: #7ee8fa; font-weight: bold; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <span id="score-display">SCORE: 0</span>
+    <span id="coin-display">&#9679; 0</span>
+    <span id="lives-display">&#9829;&#9829;&#9829;</span>
+    <span id="level-display">LVL 1</span>
+    <span id="hi-display">BEST: 0</span>
+  </div>
+  <canvas id="canvas" width="800" height="300"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score-display');
+    const hiEl    = document.getElementById('hi-display');
+    const coinEl  = document.getElementById('coin-display');
+    const livesEl = document.getElementById('lives-display');
+    const levelEl = document.getElementById('level-display');
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const GROUND = H - 60;       // player.y when standing (top of player)
+    const PLAYER_H = 40;
+    const SLIDE_H  = 18;
+    const FLOOR = GROUND + PLAYER_H; // bottom of player / ground surface = 280
+
+    // ---- Level themes (sky, buildings, ground colours + building layout [x,w,h]) ----
+    const LEVEL_THEMES = [
+      { sky: '#0f0e17', bldCol: '#16213e', ground: '#e94560', gFill: '#2a0a14', gTile: '#c73352',
+        blds: [[0,60,120],[55,40,100],[90,50,140],[135,35,110],[165,45,130],[205,30,115],
+               [230,55,145],[280,40,105],[315,50,125],[360,35,100],[390,45,135],
+               [430,60,120],[485,40,110],[520,50,140],[565,35,115],[595,45,130],
+               [635,55,120],[685,40,105],[720,50,145],[765,40,125]] },
+      { sky: '#04100d', bldCol: '#0a2018', ground: '#00cec9', gFill: '#001a17', gTile: '#007a76',
+        blds: [[0,80,88],[84,15,132],[103,62,80],[168,88,98],[260,18,142],[283,74,86],
+               [362,82,104],[448,18,128],[470,76,94],[550,88,110],[643,18,140],[666,64,92],
+               [735,58,105],[796,40,88]] },
+      { sky: '#0f0600', bldCol: '#2b1200', ground: '#e67e22', gFill: '#1a0800', gTile: '#b35900',
+        blds: [[0,26,72],[30,22,88],[56,30,62],[90,22,82],[115,26,74],[143,32,94],
+               [179,22,68],[204,26,78],[234,30,98],[268,22,72],[295,26,88],[329,30,62],
+               [363,22,82],[389,26,68],[419,30,92],[453,22,78],[479,26,72],[509,30,88],
+               [543,22,68],[569,26,82],[599,30,98],[633,22,74],[659,26,88],[689,30,62],
+               [723,22,78],[749,30,93],[783,26,68]] },
+      { sky: '#04000f', bldCol: '#120028', ground: '#a855f7', gFill: '#0e0018', gTile: '#7e22ce',
+        blds: [[0,14,185],[20,10,130],[36,12,200],[54,14,155],[74,9,215],[89,16,120],
+               [111,11,180],[128,9,145],[144,13,205],[163,14,165],[183,10,135],[199,12,195],
+               [217,14,160],[237,9,220],[252,15,125],[273,11,175],[290,9,140],[306,13,200],
+               [325,14,170],[345,10,130],[361,12,190],[379,14,155],[399,9,215],[414,16,120],
+               [436,11,180],[453,9,145],[469,13,205],[488,14,165],[508,10,135],[524,12,195],
+               [542,14,160],[562,9,220],[577,15,125],[598,11,175],[615,9,140],[631,13,200],
+               [650,14,170],[670,10,130],[686,12,190],[704,14,155],[724,9,215],[739,16,120],
+               [761,11,180],[778,9,145]] },
+    ];
+    function getTheme() { return LEVEL_THEMES[Math.min(level - 1, LEVEL_THEMES.length - 1)]; }
+
+    // ---- Palette ----
+    const COL = {
+      sky:      '#0f0e17',
+      ground:   '#e94560',
+      player:   '#a8dadc',
+      obstacle: '#f5a623',
+      particle: '#e94560',
+      text:     '#ffffff',
+      dim:      '#444466',
+    };
+
+    // ---- State ----
+    let state = 'start'; // 'start' | 'running' | 'levelup' | 'dead'
+    let score = 0;
+    let hiScore = 0;
+    let speed = 0;
+    let frame = 0;
+    let particles = [];
+    let stars = [];
+    let lives = 3;
+    let invincible = 0;    // countdown frames of hit-invincibility
+    let totalCoins = 0;    // cumulative coins this run (for 1-up milestone)
+    let nextLifeAt = 50;   // coin total at which next extra life is awarded
+    let level = 1;
+    let levelUpTimer = 0;  // counts down during level transition
+    let nextLevelScore = 5000;
+    let floatingTexts = [];
+    let comboWorth = 0;    // accumulated coin value in current combo window
+    let comboTimer = 0;    // frames remaining before combo resets
+    let comboText  = null; // reference to the active combo FloatText object
+
+    // ---- Player ----
+    const player = {
+      x: 100,
+      y: GROUND,
+      w: 32,
+      h: PLAYER_H,
+      vy: 0,
+      onGround: true,
+      jumpsLeft: 2,
+      lean: 0,
+      legPhase: 0,
+      sliding: false,
+      slideTimer: 0,
+    };
+
+    // ---- Obstacles ----
+    let obstacles = [];
+    let nextObstacle = 80;
+
+    // ---- Coins ----
+    let coins = [];
+    let coinCount = 0;
+    let nextCoin = 50;
+
+    // ---- Stars (background) ----
+    function initStars() {
+      stars = [];
+      for (let i = 0; i < 60; i++) {
+        stars.push({ x: Math.random() * W, y: Math.random() * GROUND * 0.8, r: Math.random() * 1.5 + 0.3, s: Math.random() * 0.3 + 0.1 });
+      }
+    }
+
+    // ---- Particles ----
+    function spawnParticles(x, y, color, count = 12) {
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const spd = Math.random() * 4 + 1;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * spd,
+          vy: Math.sin(angle) * spd - 2,
+          life: 1,
+          decay: Math.random() * 0.03 + 0.02,
+          r: Math.random() * 5 + 2,
+          color,
+        });
+      }
+    }
+
+    function spawnDustParticle() {
+      particles.push({
+        x: player.x + player.w / 2,
+        y: FLOOR,
+        vx: -speed * 0.3 + (Math.random() - 0.5) * 1,
+        vy: -Math.random() * 1.5,
+        life: 1,
+        decay: 0.06,
+        r: Math.random() * 3 + 1,
+        color: COL.ground,
+      });
+    }
+
+    // ---- Floating texts ----
+    function spawnFloatText(x, y, text, color) {
+      const ft = { x, y, text, color, life: 1, vy: -1.8, scale: 1.4 };
+      floatingTexts.push(ft);
+      return ft;
+    }
+
+    function addCoinCombo(worth, x, y) {
+      comboWorth += worth;
+      comboTimer = 48; // window to keep combo alive
+      if (comboText && floatingTexts.includes(comboText)) {
+        // Update existing text and pop the scale
+        comboText.text  = '+' + comboWorth;
+        comboText.scale = 1.6;
+        comboText.life  = Math.max(comboText.life, 0.85); // refresh fade
+      } else {
+        comboText = spawnFloatText(x, y - 20, '+' + comboWorth, '#ffe066');
+      }
+    }
+
+    // ---- Reset ----
+    function reset() {
+      score = 0;
+      speed = 5;
+      frame = 0;
+      obstacles = [];
+      nextObstacle = 80;
+      coins = [];
+      coinCount = 0;
+      nextCoin = 50;
+      particles = [];
+      lives = 3;
+      invincible = 0;
+      totalCoins = 0;
+      nextLifeAt = 50;
+      level = 1;
+      levelUpTimer = 0;
+      nextLevelScore = 5000;
+      floatingTexts = [];
+      comboWorth = 0;
+      comboTimer = 0;
+      comboText  = null;
+      player.y = GROUND;
+      player.h = PLAYER_H;
+      player.vy = 0;
+      player.onGround = true;
+      player.jumpsLeft = 2;
+      player.lean = 0;
+      player.legPhase = 0;
+      player.sliding = false;
+      player.slideTimer = 0;
+    }
+
+    // ---- Jump ----
+    function jump() {
+      if (state === 'start') { state = 'running'; reset(); return; }
+      if (state === 'dead') { state = 'running'; reset(); return; }
+      if (player.sliding) { endSlide(); return; }
+      if (player.jumpsLeft > 0) {
+        player.vy = -13;
+        player.jumpsLeft--;
+        spawnParticles(player.x + player.w / 2, player.y + player.h, '#a8dadc', 6);
+      }
+    }
+
+    // ---- Slide ----
+    function startSlide() {
+      if (!player.onGround || player.sliding) return;
+      player.sliding = true;
+      player.slideTimer = 38;
+      player.h = SLIDE_H;
+      player.y = GROUND + (PLAYER_H - SLIDE_H); // keep feet on ground
+    }
+
+    function endSlide() {
+      if (!player.sliding) return;
+      player.sliding = false;
+      player.slideTimer = 0;
+      player.h = PLAYER_H;
+      player.y = GROUND;
+    }
+
+    // ---- Input ----
+    document.addEventListener('keydown', e => {
+      if (e.code === 'ArrowUp')   { e.preventDefault(); jump(); }
+      if (e.code === 'ArrowDown') { e.preventDefault(); startSlide(); }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (state === 'start' || state === 'dead') jump();
+      }
+    });
+    canvas.addEventListener('pointerdown', () => jump());
+
+    // Coordinate note:
+    //   ob.y = bottom of obstacle, ob.y - ob.h = top.
+    //   Player standing: top=GROUND(240), bottom=FLOOR(280).
+    //   Player sliding:  top=GROUND+22(262), bottom=FLOOR(280).
+    //   Slide-under bottom must be 246–261: hits standing/jumping, misses sliding.
+
+    // Gap bottom — sliding player top + a little breathing room
+    const SLIDE_CLEAR = GROUND + 20; // = 260; obstacle bottom must be <= this to let slide through
+
+    // ---- Obstacle shapes ----
+    // Weights per level: [short, tall, wide, pair, overhead, lowwall]
+    const OBSTACLE_WEIGHTS = [
+      [4, 2, 2, 1, 2, 1],   // level 1 — easy intro
+      [2, 2, 2, 2, 3, 2],   // level 2 — balanced
+      [1, 2, 2, 3, 3, 3],   // level 3 — harder mix
+      [0, 1, 2, 3, 3, 4],   // level 4 — mostly hard
+    ];
+
+    function weightedPick(weights) {
+      const total = weights.reduce((a, b) => a + b, 0);
+      let r = Math.random() * total;
+      for (let i = 0; i < weights.length; i++) {
+        r -= weights[i];
+        if (r <= 0) return i;
+      }
+      return weights.length - 1;
+    }
+
+    function makeObstacle() {
+      const w = OBSTACLE_WEIGHTS[Math.min(level - 1, OBSTACLE_WEIGHTS.length - 1)];
+      const kind = weightedPick(w);
+      const s = Math.min(1 + (level - 1) * 0.18, 1.7); // size scale, capped at 1.7×
+      const sw = n => Math.round(n * s);
+      if (kind === 0) return { x: W + 20, y: FLOOR,       w: sw(28), h: sw(30), type: 'ground' };
+      if (kind === 1) return { x: W + 20, y: FLOOR,       w: sw(20), h: sw(54), type: 'ground' };
+      if (kind === 2) return { x: W + 20, y: FLOOR,       w: sw(64), h: sw(24), type: 'ground' };
+      if (kind === 3) return { x: W + 20, y: FLOOR,       w: sw(52), h: sw(42), type: 'ground', pair: true };
+      if (kind === 4) return { x: W + 20, y: SLIDE_CLEAR, w: sw(72), h: 52,    type: 'overhead' };
+               return { x: W + 20, y: SLIDE_CLEAR, w: sw(34), h: SLIDE_CLEAR,  type: 'lowwall' };
+    }
+
+    // ---- Coin spawn patterns ----
+    // Coin heights:
+    //   FLOOR-18 (=262) — ground level, collect while running
+    //   GROUND-30 (=210) — low jump
+    //   GROUND-80 (=160) — high / double jump
+    //   FLOOR-10 (=270) — slide zone, reward for sliding
+    function spawnCoinGroup() {
+      const kind = Math.floor(Math.random() * 6);
+      const sx = W + 20;
+      if (kind === 0) {
+        // Row of 4 at ground level — run right through
+        for (let i = 0; i < 4; i++)
+          coins.push({ x: sx + i * 28, y: FLOOR - 18, r: 8, phase: i * 0.4 });
+      } else if (kind === 1) {
+        // Arc over an imaginary obstacle — must jump
+        for (let i = 0; i < 6; i++) {
+          const t = i / 5;
+          coins.push({ x: sx + i * 28, y: FLOOR - 18 - Math.sin(t * Math.PI) * 100, r: 8, phase: i * 0.3 });
+        }
+      } else if (kind === 2) {
+        // Two rows stacked: ground + mid — jump to grab both
+        for (let i = 0; i < 3; i++) {
+          coins.push({ x: sx + i * 30, y: FLOOR - 18,  r: 8, phase: i * 0.5 });
+          coins.push({ x: sx + i * 30, y: GROUND - 30, r: 8, phase: i * 0.5 + 1 });
+        }
+      } else if (kind === 3) {
+        // Diagonal rising line — jump to follow
+        for (let i = 0; i < 5; i++)
+          coins.push({ x: sx + i * 30, y: FLOOR - 18 - i * 22, r: 8, phase: i * 0.4 });
+      } else if (kind === 4) {
+        // Single big-value coin up high — double jump
+        coins.push({ x: sx + 10, y: GROUND - 80, r: 11, phase: 0, big: true });
+      } else {
+        // Coin bag — 10 coins, floats at mid height
+        coins.push({ x: sx + 10, y: GROUND - 40, r: 13, phase: 0, bag: true });
+      }
+    }
+
+    // ---- AABB collision ----
+    function collides(a, b) {
+      const pad = 6;
+      return (
+        a.x + pad < b.x + b.w &&
+        a.x + a.w - pad > b.x &&
+        a.y + pad < b.y + b.h &&
+        a.y + a.h - pad > b.y
+      );
+    }
+
+    // ---- Draw helpers ----
+    function roundRect(x, y, w, h, r = 4) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    function drawPlayer() {
+      const px = player.x;
+      const py = player.y;
+      const pw = player.w;
+      const ph = player.h;
+      const sliding = player.sliding;
+
+      ctx.save();
+      // Anchor at bottom of player (moves up when jumping)
+      ctx.translate(px + pw / 2, py + ph);
+
+      if (sliding) {
+        // Sliding: wide flat body
+        const sw = pw + 14, sh = SLIDE_H;
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(0, 2, sw * 0.6, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Body (flat)
+        ctx.fillStyle = COL.player;
+        roundRect(-sw / 2, -sh, sw, sh - 4, 5);
+        ctx.fill();
+        // Visor (side-facing)
+        ctx.fillStyle = '#1a1a2e';
+        roundRect(sw / 2 - 12, -sh + 3, 10, sh - 10, 3);
+        ctx.fill();
+        ctx.fillStyle = '#57b8e8';
+        roundRect(sw / 2 - 11, -sh + 5, 8, sh - 14, 2);
+        ctx.fill();
+      } else {
+        const lean = player.onGround ? Math.sin(player.legPhase * 0.5) * 0.08 : -0.15;
+        ctx.rotate(lean);
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(0, 2, pw * 0.6, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Legs
+        ctx.strokeStyle = '#7bbfbf';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        if (player.onGround) {
+          const lp = player.legPhase;
+          ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-6 + Math.sin(lp) * 8, 0); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(6 - Math.sin(lp) * 8, 0); ctx.stroke();
+        } else {
+          ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-10, 4); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(10, 4); ctx.stroke();
+        }
+
+        // Body
+        ctx.fillStyle = COL.player;
+        roundRect(-pw / 2, -ph, pw, ph - 12, 6);
+        ctx.fill();
+
+        // Visor
+        ctx.fillStyle = '#1a1a2e';
+        roundRect(-pw / 2 + 4, -ph + 6, pw - 8, 14, 4);
+        ctx.fill();
+        ctx.fillStyle = '#57b8e8';
+        roundRect(-pw / 2 + 6, -ph + 8, pw - 12, 10, 3);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    function drawObstacle(ob) {
+      const top = ob.y - ob.h;
+      const bot = ob.y;
+
+      if (ob.type === 'ground') {
+        if (ob.pair) {
+          // Two spikes side by side
+          const sw = 20, gap = 12;
+          ctx.fillStyle = COL.obstacle;
+          roundRect(ob.x,          FLOOR - 42, sw, 42, 3); ctx.fill();
+          roundRect(ob.x + sw + gap, FLOOR - 32, sw, 32, 3); ctx.fill();
+          ctx.shadowColor = COL.obstacle; ctx.shadowBlur = 8;
+          ctx.fillStyle = 'rgba(245,166,35,0.35)';
+          roundRect(ob.x,          FLOOR - 42, sw, 42, 3); ctx.fill();
+          roundRect(ob.x + sw + gap, FLOOR - 32, sw, 32, 3); ctx.fill();
+          ctx.shadowBlur = 0;
+        } else {
+          ctx.fillStyle = COL.obstacle;
+          roundRect(ob.x, top, ob.w, ob.h, 3); ctx.fill();
+          ctx.shadowColor = COL.obstacle; ctx.shadowBlur = 8;
+          ctx.fillStyle = 'rgba(245,166,35,0.4)';
+          roundRect(ob.x, top, ob.w, ob.h, 3); ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+
+      } else if (ob.type === 'overhead') {
+        // Hanging beam — slide under or jump over (if reaction is fast enough)
+        const beamH = 14;
+        ctx.fillStyle = '#c0392b';
+        roundRect(ob.x, bot - beamH, ob.w, beamH, 3); ctx.fill();
+        // Support rods
+        ctx.fillStyle = '#7f1d1d';
+        roundRect(ob.x + ob.w * 0.15, top, ob.w * 0.1, ob.h - beamH, 2); ctx.fill();
+        roundRect(ob.x + ob.w * 0.75, top, ob.w * 0.1, ob.h - beamH, 2); ctx.fill();
+        // Glow
+        ctx.shadowColor = '#e74c3c'; ctx.shadowBlur = 10;
+        ctx.fillStyle = 'rgba(231,76,60,0.35)';
+        roundRect(ob.x, bot - beamH, ob.w, beamH, 3); ctx.fill();
+        ctx.shadowBlur = 0;
+
+      } else if (ob.type === 'lowwall') {
+        // Solid wall from canvas top down to bot — MUST SLIDE, jumping goes INTO it
+        // Wall body
+        ctx.fillStyle = '#1a0a2e';
+        roundRect(ob.x, 0, ob.w, bot, 3); ctx.fill();
+        // Hazard stripes
+        ctx.save();
+        ctx.beginPath();
+        roundRect(ob.x, 0, ob.w, bot, 3);
+        ctx.clip();
+        ctx.strokeStyle = '#9b1a2e';
+        ctx.lineWidth = 7;
+        for (let sy = -bot; sy < bot * 2; sy += 18) {
+          ctx.beginPath();
+          ctx.moveTo(ob.x, sy);
+          ctx.lineTo(ob.x + ob.w, sy + ob.w);
+          ctx.stroke();
+        }
+        ctx.restore();
+        // Bright danger edge on the bottom (where gap starts)
+        ctx.fillStyle = '#e94560';
+        ctx.fillRect(ob.x, bot - 4, ob.w, 4);
+        // Slide gap highlight — arrow pointing into gap
+        ctx.fillStyle = 'rgba(168,218,220,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(ob.x + ob.w + 8, bot - 10);
+        ctx.lineTo(ob.x + ob.w + 8, FLOOR);
+        ctx.lineTo(ob.x + ob.w + 18, (bot + FLOOR) / 2);
+        ctx.closePath();
+        ctx.fill();
+        // Glow
+        ctx.shadowColor = '#e94560'; ctx.shadowBlur = 12;
+        ctx.fillStyle = 'rgba(233,69,96,0.2)';
+        roundRect(ob.x, 0, ob.w, bot, 3); ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    function drawCoin(c) {
+      const bob = Math.sin(frame * 0.07 + c.phase) * 3;
+      const cy = c.y + bob;
+      const r = c.r;
+      const pulse = 0.7 + Math.sin(frame * 0.1 + c.phase) * 0.3;
+
+      if (c.bag) {
+        // Coin bag — purple sack shape
+        ctx.shadowColor = '#a78bfa';
+        ctx.shadowBlur = 16 * pulse;
+
+        // Sack body
+        ctx.fillStyle = '#7c3aed';
+        ctx.beginPath();
+        ctx.ellipse(c.x, cy + r * 0.15, r, r * 0.9, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Sack highlight
+        ctx.fillStyle = '#a78bfa';
+        ctx.beginPath();
+        ctx.ellipse(c.x - r * 0.2, cy - r * 0.1, r * 0.35, r * 0.45, -0.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Tie at top
+        ctx.fillStyle = '#ffe066';
+        ctx.beginPath();
+        ctx.ellipse(c.x, cy - r * 0.8, r * 0.28, r * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // "x10" label
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.round(r * 0.75)}px Courier New`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('×10', c.x, cy + r * 0.2);
+        ctx.textBaseline = 'alphabetic';
+
+        ctx.shadowBlur = 0;
+        return;
+      }
+
+      // Regular / big coin
+      ctx.shadowColor = '#ffe066';
+      ctx.shadowBlur = 14 * pulse;
+      ctx.fillStyle = c.big ? '#ffcc00' : '#ffe066';
+      ctx.beginPath(); ctx.arc(c.x, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Inner highlight
+      ctx.fillStyle = '#fff9c4';
+      ctx.beginPath(); ctx.arc(c.x - r * 0.25, cy - r * 0.25, r * 0.45, 0, Math.PI * 2); ctx.fill();
+
+      // Rim
+      ctx.strokeStyle = '#e6ac00';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(c.x, cy, r, 0, Math.PI * 2); ctx.stroke();
+
+      // "×5" label on big coin / rotating spokes
+      if (c.big) {
+        ctx.strokeStyle = '#c8860a';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        const a = frame * 0.04 + c.phase;
+        for (let i = 0; i < 4; i++) {
+          const ang = a + i * Math.PI / 2;
+          ctx.beginPath();
+          ctx.moveTo(c.x + Math.cos(ang) * r * 0.3, cy + Math.sin(ang) * r * 0.3);
+          ctx.lineTo(c.x + Math.cos(ang) * r * 0.85, cy + Math.sin(ang) * r * 0.85);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#7a4f00';
+        ctx.font = `bold ${Math.round(r * 0.7)}px Courier New`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('×5', c.x, cy);
+        ctx.textBaseline = 'alphabetic';
+      }
+    }
+
+    // ---- Ground segments ----
+    let groundTiles = [];
+    function initGround() {
+      groundTiles = [];
+      for (let i = 0; i < Math.ceil(W / 40) + 2; i++) {
+        groundTiles.push(i * 40);
+      }
+    }
+
+    // ---- Update ----
+    function update() {
+      // Level-up transition
+      if (state === 'levelup') {
+        frame++;
+        levelUpTimer--;
+        const progress = (130 - levelUpTimer) / 130;
+        // Player runs toward portal (starts at progress 0.22, enters at 0.58)
+        if (progress < 0.22) {
+          player.legPhase += speed * 0.12;
+        } else if (progress < 0.58) {
+          player.x += speed * 1.5;
+          player.legPhase += speed * 0.16;
+        }
+        // Background scrolls gently
+        for (const s of stars) { s.x -= s.s * 1.5; if (s.x < 0) s.x = W; }
+        for (let i = 0; i < groundTiles.length; i++) {
+          groundTiles[i] -= speed * 0.6;
+          if (groundTiles[i] + 40 < 0) groundTiles[i] += groundTiles.length * 40;
+        }
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
+          if (p.life <= 0) particles.splice(i, 1);
+        }
+        if (levelUpTimer <= 0) {
+          level++;
+          player.x = 100;
+          nextLevelScore = score + 5000;
+          obstacles = [];
+          coins = [];
+          invincible = 90;
+          state = 'running';
+        }
+        return;
+      }
+
+      if (state !== 'running') return;
+
+      frame++;
+      score++;
+      // Base speed scales with level + gradual increase within level
+      speed = 5 + (level - 1) * 3.5 + (score % 5000) / 700;
+
+      // Invincibility countdown
+      if (invincible > 0) invincible--;
+
+      // Slide timer
+      if (player.sliding) {
+        player.slideTimer--;
+        if (player.slideTimer <= 0) endSlide();
+      }
+
+      // Player physics (no gravity/jump while sliding on ground)
+      if (!player.sliding) {
+        player.vy += 0.6;
+        player.y += player.vy;
+        const groundY = GROUND; // top of player when standing on ground
+        if (player.y >= groundY) {
+          player.y = groundY;
+          player.vy = 0;
+          player.onGround = true;
+          player.jumpsLeft = 2;
+        } else {
+          player.onGround = false;
+        }
+      }
+
+      // Leg / dust animation
+      if (player.onGround && !player.sliding) {
+        player.legPhase += speed * 0.12;
+        if (frame % 3 === 0) spawnDustParticle();
+      } else if (player.sliding) {
+        if (frame % 4 === 0) spawnDustParticle();
+      }
+
+      // Level-up check
+      if (score >= nextLevelScore) {
+        state = 'levelup';
+        levelUpTimer = 130;
+        spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#7ee8fa', 30);
+        spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 15);
+        return;
+      }
+
+      // Obstacles — gap shrinks each level
+      nextObstacle--;
+      if (nextObstacle <= 0) {
+        obstacles.push(makeObstacle());
+        const gapMin = Math.max(30, 65 - (level - 1) * 8);
+        const gapMax = Math.max(70, 120 - (level - 1) * 12);
+        nextObstacle = Math.floor(Math.random() * (gapMax - gapMin) + gapMin);
+      }
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].x -= speed;
+        if (obstacles[i].x + obstacles[i].w < 0) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+        const ob = obstacles[i];
+        const obHitbox = { x: ob.x, y: ob.y - ob.h, w: ob.w, h: ob.h };
+        const playerHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (invincible <= 0 && collides(playerHitbox, obHitbox)) {
+          lives--;
+          spawnParticles(player.x + player.w / 2, player.y + player.h / 2, COL.player, 16);
+          spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 8);
+          if (lives <= 0) {
+            state = 'dead';
+            if (score > hiScore) hiScore = score;
+          } else {
+            invincible = 120; // ~2 seconds of invincibility
+            // Knock player back to ground and clear slide
+            endSlide();
+            player.vy = -6;  // small bounce on hit
+          }
+        }
+      }
+
+      // Coins
+      nextCoin--;
+      if (nextCoin <= 0) {
+        spawnCoinGroup();
+        nextCoin = Math.floor(Math.random() * 80 + 60);
+      }
+
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const c = coins[i];
+        c.x -= speed;
+        if (c.x + c.r < 0) { coins.splice(i, 1); continue; }
+        // Collection check — use coin circle vs player box
+        const bob = Math.sin(frame * 0.07 + c.phase) * 3;
+        const cy = c.y + bob;
+        if (c.x + c.r > player.x && c.x - c.r < player.x + player.w &&
+            cy + c.r > player.y && cy - c.r < player.y + player.h) {
+          coins.splice(i, 1);
+          const worth = c.bag ? 10 : c.big ? 5 : 1;
+          coinCount  += worth;
+          totalCoins += worth;
+          score += worth * 10;
+          spawnParticles(c.x, cy, c.bag ? '#a78bfa' : '#ffe066', c.bag ? 18 : c.big ? 14 : 8);
+          addCoinCombo(worth, c.x, cy);
+          // 1-up every 50 coins
+          if (totalCoins >= nextLifeAt) {
+            lives++;
+            nextLifeAt += 50;
+            spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ff6b8a', 20);
+            spawnFloatText(player.x + player.w / 2, player.y - 10, '+1 \u2665', '#ff6b8a');
+          }
+        }
+      }
+
+      // Coin combo timer
+      if (comboTimer > 0) {
+        comboTimer--;
+        if (comboTimer === 0) { comboWorth = 0; comboText = null; }
+      }
+
+      // Floating texts
+      for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        const ft = floatingTexts[i];
+        ft.y    += ft.vy;
+        ft.vy   *= 0.96;
+        ft.scale += (1 - ft.scale) * 0.18; // spring back to 1
+        ft.life -= 0.018;
+        if (ft.life <= 0) {
+          if (ft === comboText) comboText = null;
+          floatingTexts.splice(i, 1);
+        }
+      }
+
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.15;
+        p.life -= p.decay;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+
+      // Stars scroll
+      for (const s of stars) {
+        s.x -= s.s;
+        if (s.x < 0) s.x = W;
+      }
+
+      // Ground tiles scroll
+      for (let i = 0; i < groundTiles.length; i++) {
+        groundTiles[i] -= speed;
+        if (groundTiles[i] + 40 < 0) groundTiles[i] += groundTiles.length * 40;
+      }
+
+      // Update UI
+      scoreEl.textContent = 'SCORE: ' + score;
+      hiEl.textContent = 'BEST: ' + hiScore;
+      coinEl.textContent = '\u25cf ' + coinCount;
+      livesEl.textContent = '\u2665'.repeat(Math.max(0, lives)) || '\u2661';
+      levelEl.textContent = 'LVL ' + level;
+    }
+
+    // ---- Draw ----
+    function draw() {
+      const theme = getTheme();
+
+      // Sky
+      ctx.fillStyle = theme.sky;
+      ctx.fillRect(0, 0, W, H);
+
+      // Stars
+      for (const s of stars) {
+        ctx.fillStyle = `rgba(200,220,255,${0.3 + Math.sin(frame * 0.02 + s.x) * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Distant city silhouette
+      ctx.fillStyle = theme.bldCol;
+      for (const [x, w, h] of theme.blds) {
+        ctx.fillRect(x, GROUND - h, w, h);
+      }
+
+      // Ground line glow
+      ctx.shadowColor = theme.ground;
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = theme.ground;
+      ctx.fillRect(0, FLOOR - 2, W, 4);
+      ctx.shadowBlur = 0;
+
+      // Ground tiles
+      ctx.fillStyle = theme.gTile;
+      for (const tx of groundTiles) {
+        ctx.fillRect(tx, FLOOR + 2, 30, 3);
+      }
+
+      // Ground fill
+      ctx.fillStyle = theme.gFill;
+      ctx.fillRect(0, FLOOR + 2, W, H - FLOOR);
+
+      // Obstacles
+      for (const ob of obstacles) drawObstacle(ob);
+
+      // Coins
+      for (const c of coins) drawCoin(c);
+
+      // Particles
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      ctx.globalAlpha = 1;
+
+      // Floating texts
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const ft of floatingTexts) {
+        ctx.save();
+        ctx.globalAlpha = ft.life;
+        ctx.translate(ft.x, ft.y);
+        ctx.scale(ft.scale, ft.scale);
+        ctx.shadowColor = ft.color;
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = ft.color;
+        ctx.font = 'bold 26px Courier New';
+        ctx.fillText(ft.text, 0, 0);
+        ctx.restore();
+      }
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.globalAlpha = 1;
+
+      // Player — hide when inside the portal (progress > 0.58)
+      const inPortal = state === 'levelup' && (130 - levelUpTimer) / 130 > 0.56;
+      if (state !== 'dead' && !inPortal) {
+        if (invincible <= 0 || Math.floor(invincible / 6) % 2 === 0) {
+          drawPlayer();
+        }
+      }
+
+      // Portal animation
+      if (state === 'levelup') {
+        const progress = (130 - levelUpTimer) / 130; // 0 → 1
+        const PORTAL_X  = 520;
+        const PORTAL_CY = FLOOR - PLAYER_H * 0.6;
+        const PW = 86, PH = 158; // full portal size
+
+        // Scale: grow in phase 1, stay open phase 2, shrink phase 3
+        let pScale;
+        if      (progress < 0.28) pScale = progress / 0.28;
+        else if (progress < 0.82) pScale = 1;
+        else                      pScale = (1 - progress) / 0.18;
+        pScale = Math.max(0, pScale);
+
+        const pw = PW * pScale, ph = PH * pScale;
+        const spin = frame * 0.04;
+
+        // Draw portal
+        ctx.save();
+
+        // Outer glow halo
+        ctx.shadowColor = '#7ee8fa';
+        ctx.shadowBlur = 28 * pScale;
+        ctx.strokeStyle = '#7ee8fa';
+        ctx.lineWidth = 4 * pScale;
+        ctx.beginPath();
+        ctx.ellipse(PORTAL_X, PORTAL_CY, pw / 2, ph / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Inner void (dark purple)
+        const voidGrad = ctx.createRadialGradient(PORTAL_X, PORTAL_CY, 0, PORTAL_X, PORTAL_CY, pw / 2);
+        voidGrad.addColorStop(0, 'rgba(255,255,255,0.9)');
+        voidGrad.addColorStop(0.25, 'rgba(100,200,255,0.7)');
+        voidGrad.addColorStop(0.6, 'rgba(40,0,100,0.85)');
+        voidGrad.addColorStop(1, 'rgba(10,0,30,0.95)');
+        ctx.fillStyle = voidGrad;
+        ctx.beginPath();
+        ctx.ellipse(PORTAL_X, PORTAL_CY, pw / 2, ph / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Rotating inner rings
+        for (let r = 0; r < 3; r++) {
+          const rf = 0.35 + r * 0.2;
+          ctx.strokeStyle = `rgba(126,232,250,${0.6 - r * 0.15})`;
+          ctx.lineWidth = (3 - r) * pScale;
+          ctx.beginPath();
+          ctx.ellipse(PORTAL_X, PORTAL_CY, pw / 2 * rf, ph / 2 * rf, spin + r * 0.5, 0, Math.PI * 1.6);
+          ctx.stroke();
+        }
+
+        // Electric tendrils along the rim
+        ctx.strokeStyle = `rgba(180,240,255,${0.7 * pScale})`;
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 10; i++) {
+          const ang = (i / 10) * Math.PI * 2 + spin * 1.5;
+          const rx = pw / 2, ry = ph / 2;
+          const ex = PORTAL_X + Math.cos(ang) * rx;
+          const ey = PORTAL_CY + Math.sin(ang) * ry;
+          const midX = ex + (Math.random() - 0.5) * 12 * pScale;
+          const midY = ey + (Math.random() - 0.5) * 12 * pScale;
+          ctx.beginPath();
+          ctx.moveTo(PORTAL_X + Math.cos(ang) * rx * 0.6, PORTAL_CY + Math.sin(ang) * ry * 0.6);
+          ctx.quadraticCurveTo(midX, midY, ex, ey);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        // Flash when fully open and when closing
+        const flashA = pScale > 0.98 ? Math.sin(frame * 0.25) * 0.12 : 0;
+        if (flashA > 0) {
+          ctx.fillStyle = `rgba(126,232,250,${flashA})`;
+          ctx.fillRect(0, 0, W, H);
+        }
+
+        // "LEVEL X" text visible while portal is open
+        if (progress > 0.35 && progress < 0.82) {
+          const ta = Math.min(1, (progress - 0.35) / 0.12);
+          ctx.globalAlpha = ta;
+          ctx.textAlign = 'center';
+          ctx.shadowColor = '#7ee8fa';
+          ctx.shadowBlur = 22;
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 48px Courier New';
+          ctx.fillText('LEVEL ' + (level + 1), W / 2, H / 2 - 8);
+          ctx.shadowBlur = 0;
+          ctx.font = '20px Courier New';
+          ctx.fillStyle = '#7ee8fa';
+          ctx.fillText('GET READY', W / 2, H / 2 + 26);
+          ctx.globalAlpha = 1;
+          ctx.textAlign = 'left';
+        }
+      }
+
+      // Overlay messages
+      if (state === 'start') {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = COL.text;
+        ctx.font = 'bold 48px Courier New';
+        ctx.fillText('RUNNER', W / 2, H / 2 - 30);
+        ctx.font = '18px Courier New';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('UP to jump  •  DOWN to slide  •  SPACE / TAP to start', W / 2, H / 2 + 20);
+        ctx.textAlign = 'left';
+      }
+
+      if (state === 'dead') {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = COL.ground;
+        ctx.font = 'bold 42px Courier New';
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.fillStyle = COL.text;
+        ctx.font = '20px Courier New';
+        ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u2665\u00d7' + Math.max(0,lives), W / 2, H / 2 + 10);
+        ctx.font = '16px Courier New';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('SPACE / TAP to restart', W / 2, H / 2 + 44);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    // ---- Loop ----
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    initStars();
+    initGround();
+    loop();
+  </script>
+</body>
+</html>
