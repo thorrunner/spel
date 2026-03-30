@@ -2,28 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Runner</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
+    html, body {
       background: #1a1a2e;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
+      height: 100dvh;
       font-family: 'Courier New', monospace;
       color: #eee;
       user-select: none;
+      -webkit-user-select: none;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-touch-callout: none;
     }
     canvas {
       border: 2px solid #e94560;
       border-radius: 4px;
       display: block;
+      max-width: 100vw;
+      max-height: 80dvh;
     }
     #ui {
       width: 800px;
+      max-width: 100vw;
       display: flex;
       justify-content: space-between;
       padding: 8px 4px;
@@ -36,6 +46,11 @@
     #lives-display { color: #ff6b8a; font-weight: bold; font-size: 16px; letter-spacing: 3px; }
     #level-display  { color: #7ee8fa; font-weight: bold; font-size: 16px; }
     #diamond-display { color: #40c9a2; font-weight: bold; font-size: 16px; }
+    @media (max-width: 820px) {
+      #ui { font-size: 11px; padding: 4px 2px; }
+      #score-display, #coin-display, #lives-display, #level-display, #diamond-display { font-size: 12px; }
+      #hi-display { font-size: 11px; }
+    }
   </style>
 </head>
 <body>
@@ -61,6 +76,21 @@
 
     const W = canvas.width;
     const H = canvas.height;
+
+    // ---- Responsive canvas scaling ----
+    function resizeCanvas() {
+      const maxW = window.innerWidth;
+      const maxH = window.innerHeight * 0.82;
+      const scale = Math.min(maxW / W, maxH / H);
+      canvas.style.width = Math.floor(W * scale) + 'px';
+      canvas.style.height = Math.floor(H * scale) + 'px';
+      // Also resize the UI bar to match
+      const ui = document.getElementById('ui');
+      ui.style.width = Math.floor(W * scale) + 'px';
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
     const GROUND = H - 60;       // player.y when standing (top of player)
     const PLAYER_H = 40;
     const SLIDE_H  = 18;
@@ -330,7 +360,36 @@
       spawnParticles(player.x - 60, player.y + player.h / 2, getSkin().jump, 12);
     }
 
-    // ---- Input ----
+    // ---- Touch detection ----
+    const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+    // ---- Shop purchase logic (shared by keyboard & touch) ----
+    function shopPurchase(idx) {
+      if (idx === undefined) idx = shopSelection;
+      const item = SHOP_ITEMS[idx];
+      if (item.type === 'skin') {
+        if (ownedSkins.includes(item.key)) {
+          activeSkin = item.key;
+          saveActiveSkin();
+        } else if (totalDiamonds >= item.cost) {
+          totalDiamonds -= item.cost;
+          ownedSkins.push(item.key);
+          activeSkin = item.key;
+          saveDiamonds();
+          saveOwnedSkins();
+          saveActiveSkin();
+        }
+      } else {
+        if (!upgrades[item.key] && totalDiamonds >= item.cost) {
+          totalDiamonds -= item.cost;
+          upgrades[item.key] = true;
+          saveDiamonds();
+          saveUpgrades();
+        }
+      }
+    }
+
+    // ---- Input (keyboard) ----
     document.addEventListener('keydown', e => {
       // Open shop from start or dead screen
       if ((state === 'start' || state === 'dead') && e.code === 'KeyS') {
@@ -341,29 +400,7 @@
         e.preventDefault();
         if (e.code === 'ArrowUp') shopSelection = (shopSelection + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
         if (e.code === 'ArrowDown') shopSelection = (shopSelection + 1) % SHOP_ITEMS.length;
-        if (e.code === 'Space' || e.code === 'Enter') {
-          const item = SHOP_ITEMS[shopSelection];
-          if (item.type === 'skin') {
-            if (ownedSkins.includes(item.key)) {
-              activeSkin = item.key;
-              saveActiveSkin();
-            } else if (totalDiamonds >= item.cost) {
-              totalDiamonds -= item.cost;
-              ownedSkins.push(item.key);
-              activeSkin = item.key;
-              saveDiamonds();
-              saveOwnedSkins();
-              saveActiveSkin();
-            }
-          } else {
-            if (!upgrades[item.key] && totalDiamonds >= item.cost) {
-              totalDiamonds -= item.cost;
-              upgrades[item.key] = true;
-              saveDiamonds();
-              saveUpgrades();
-            }
-          }
-        }
+        if (e.code === 'Space' || e.code === 'Enter') shopPurchase();
         if (e.code === 'Escape' || e.code === 'KeyS') state = shopReturnState;
         return;
       }
@@ -375,7 +412,127 @@
         if (state === 'start' || state === 'dead') jump();
       }
     });
-    canvas.addEventListener('pointerdown', () => jump());
+
+    // ---- Input (touch / pointer gestures) ----
+    let touchStartX = 0, touchStartY = 0, touchStartTime = 0, touchId = null;
+
+    // Convert page coordinates to canvas-internal coordinates (0..W, 0..H)
+    function pageToCanvas(px, py) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (px - rect.left) / rect.width * W,
+        y: (py - rect.top) / rect.height * H,
+      };
+    }
+
+    // Shop hit-test: returns item index or -1
+    function shopHitTest(cx, cy) {
+      const visCount = 6;
+      let scrollOff = Math.max(0, Math.min(shopSelection - 2, SHOP_ITEMS.length - visCount));
+      if (scrollOff < 0) scrollOff = 0;
+      for (let vi = 0; vi < visCount && scrollOff + vi < SHOP_ITEMS.length; vi++) {
+        const idx = scrollOff + vi;
+        const y = 80 + vi * 28;
+        if (cx > W / 2 - 230 && cx < W / 2 + 230 && cy > y - 11 && cy < y + 13) {
+          return idx;
+        }
+      }
+      // Close button area (bottom of shop)
+      if (cy > H - 30) return -2; // special: close
+      return -1;
+    }
+
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      touchStartX = t.pageX;
+      touchStartY = t.pageY;
+      touchStartTime = performance.now();
+
+      const cp = pageToCanvas(t.pageX, t.pageY);
+
+      // Shop: handle taps on items
+      if (state === 'shop') {
+        const hit = shopHitTest(cp.x, cp.y);
+        if (hit === -2) {
+          state = shopReturnState;
+        } else if (hit >= 0) {
+          shopSelection = hit;
+          shopPurchase(hit);
+        }
+        return;
+      }
+
+      // Start/dead: check if tapping "SHOP" button area
+      if (state === 'start' || state === 'dead') {
+        const shopBtnY = state === 'start' ? H / 2 + 44 : H / 2 + 60;
+        if (cp.y > shopBtnY - 18 && cp.y < shopBtnY + 10 &&
+            cp.x > W / 2 - 80 && cp.x < W / 2 + 80) {
+          shopReturnState = state;
+          state = 'shop';
+          shopSelection = 0;
+          return;
+        }
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      const t = Array.from(e.changedTouches).find(ct => ct.identifier === touchId);
+      if (!t) return;
+
+      // Shop: swipe up/down to scroll selection
+      if (state === 'shop') {
+        const dy = t.pageY - touchStartY;
+        if (Math.abs(dy) > 30) {
+          if (dy > 0) shopSelection = Math.max(0, shopSelection - 1);
+          else shopSelection = Math.min(SHOP_ITEMS.length - 1, shopSelection + 1);
+        }
+        touchId = null;
+        return;
+      }
+
+      const dx = t.pageX - touchStartX;
+      const dy = t.pageY - touchStartY;
+      const dt = performance.now() - touchStartTime;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      const SWIPE_THRESHOLD = 30;
+      const SWIPE_TIME = 400;
+
+      if (dist > SWIPE_THRESHOLD && dt < SWIPE_TIME) {
+        // It's a swipe
+        if (Math.abs(dy) > Math.abs(dx)) {
+          // Vertical swipe
+          if (dy > 0) {
+            startSlide(); // swipe down
+          } else {
+            jump(); // swipe up
+          }
+        } else {
+          // Horizontal swipe right = air dash
+          if (dx > 0) {
+            airDash();
+          }
+        }
+      } else {
+        // Tap = jump (or start/restart)
+        jump();
+      }
+
+      touchId = null;
+    }, { passive: false });
+
+    // Mouse click fallback for non-touch devices (desktop with no keyboard)
+    canvas.addEventListener('click', e => {
+      if (isTouchDevice) return; // touch handled separately
+      if (state === 'shop') return;
+      jump();
+    });
+
+    // Prevent scrolling/zooming on the whole page for Safari
+    document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
     // Coordinate note:
     //   ob.y = bottom of obstacle, ob.y - ob.h = top.
@@ -1296,10 +1453,15 @@
         ctx.fillText('RUNNER', W / 2, H / 2 - 30);
         ctx.font = '18px Courier New';
         ctx.fillStyle = '#aaa';
-        ctx.fillText('UP to jump  •  DOWN to slide  •  SPACE / TAP to start', W / 2, H / 2 + 14);
+        if (isTouchDevice) {
+          ctx.fillText('TAP jump  \u2022  SWIPE \u2193 slide  \u2022  SWIPE \u2192 dash', W / 2, H / 2 + 14);
+        } else {
+          ctx.fillText('UP to jump  \u2022  DOWN to slide  \u2022  SPACE / TAP to start', W / 2, H / 2 + 14);
+        }
+        // Shop button (tappable area)
         ctx.fillStyle = '#40c9a2';
         ctx.font = 'bold 16px Courier New';
-        ctx.fillText('S \u2014 SHOP', W / 2, H / 2 + 44);
+        ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 44);
         ctx.textAlign = 'left';
       }
 
@@ -1381,7 +1543,11 @@
 
         // Instructions
         ctx.fillStyle = '#555'; ctx.font = '12px Courier New';
-        ctx.fillText('\u2191\u2193 select  \u2022  SPACE buy  \u2022  ESC back', W / 2, H - 12);
+        if (isTouchDevice) {
+          ctx.fillText('TAP item to buy/equip  \u2022  TAP here to close', W / 2, H - 12);
+        } else {
+          ctx.fillText('\u2191\u2193 select  \u2022  SPACE buy  \u2022  ESC back', W / 2, H - 12);
+        }
         ctx.textAlign = 'left';
       }
 
@@ -1397,10 +1563,10 @@
         ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u25C6 ' + diamondCount + '   \u2665\u00d7' + Math.max(0,lives), W / 2, H / 2 + 10);
         ctx.font = '16px Courier New';
         ctx.fillStyle = '#aaa';
-        ctx.fillText('SPACE / TAP to restart', W / 2, H / 2 + 38);
+        ctx.fillText(isTouchDevice ? 'TAP to restart' : 'SPACE / TAP to restart', W / 2, H / 2 + 38);
         ctx.fillStyle = '#40c9a2';
         ctx.font = 'bold 14px Courier New';
-        ctx.fillText('S \u2014 SHOP', W / 2, H / 2 + 60);
+        ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 60);
         ctx.textAlign = 'left';
       }
     }
