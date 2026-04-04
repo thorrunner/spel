@@ -201,6 +201,11 @@
       default: { body: '#a8dadc', visor: '#57b8e8', visorBg: '#1a1a2e', legs: '#7bbfbf', jump: '#a8dadc' },
       fire:    { body: '#ff6b35', visor: '#ffdd44', visorBg: '#3a0808', legs: '#cc4422', jump: '#ff6b35' },
       neon:    { body: '#39ff14', visor: '#ff00ff', visorBg: '#0a002e', legs: '#00cc44', jump: '#39ff14' },
+      ghost:   { body: '#b8c6db', visor: '#e0e8ff', visorBg: '#2a2a4a', legs: '#8898b0', jump: '#c0d0e8', ghost: true },
+      robot:   { body: '#8a8a8a', visor: '#ff2020', visorBg: '#222222', legs: '#666666', jump: '#aaaaaa', robot: true },
+      ninja:   { body: '#2a2a2a', visor: '#cc0000', visorBg: '#111111', legs: '#1a1a1a', jump: '#444444', ninja: true, scarfColor: '#cc0000' },
+      frost:   { body: '#b0e0ff', visor: '#ffffff', visorBg: '#1a3050', legs: '#80b8d8', jump: '#d0f0ff', frost: true },
+      royal:   { body: '#8b1a8b', visor: '#ffd700', visorBg: '#2a0a2a', legs: '#6b0a6b', jump: '#c040c0', royal: true, capeColor: '#c020c0', crownColor: '#ffd700' },
     };
     function getSkin() { return SKINS[activeSkin] || SKINS.default; }
 
@@ -214,6 +219,11 @@
       { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 2, color: '#e94560' },
       { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 2, color: '#ff6b35', type: 'skin' },
       { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 2, color: '#39ff14', type: 'skin' },
+      { key: 'ghost',         name: 'GHOST SKIN',     desc: 'Transparent phantom, floats',      cost: 3, color: '#b8c6db', type: 'skin' },
+      { key: 'robot',         name: 'ROBOT SKIN',     desc: 'Antenna, bolts & mech legs',       cost: 3, color: '#8a8a8a', type: 'skin' },
+      { key: 'ninja',         name: 'NINJA SKIN',     desc: 'Slit visor & trailing scarf',      cost: 4, color: '#cc0000', type: 'skin' },
+      { key: 'frost',         name: 'FROST SKIN',     desc: 'Ice spikes & sparkle aura',        cost: 4, color: '#b0e0ff', type: 'skin' },
+      { key: 'royal',         name: 'ROYAL SKIN',     desc: 'Crown & flowing cape',             cost: 5, color: '#ffd700', type: 'skin' },
     ];
 
     function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
@@ -651,62 +661,317 @@
       // Anchor at bottom of player (moves up when jumping)
       ctx.translate(px + pw / 2, py + ph);
 
+      // Ghost: pulsing transparency
+      if (skin.ghost) {
+        ctx.globalAlpha = 0.5 + Math.sin(frame * 0.08) * 0.2;
+      }
+
       if (sliding) {
         // Sliding: wide flat body
         const sw = pw + 14, sh = SLIDE_H;
         // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillStyle = skin.ghost ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.3)';
         ctx.beginPath();
         ctx.ellipse(0, 2, sw * 0.6, 4, 0, 0, Math.PI * 2);
         ctx.fill();
+
+        // Royal cape (dragging behind while sliding)
+        if (skin.royal) {
+          const cw = Math.sin(frame * 0.08) * 3;
+          ctx.fillStyle = skin.capeColor;
+          ctx.beginPath();
+          ctx.moveTo(-sw / 2, -sh + 2);
+          ctx.quadraticCurveTo(-sw / 2 - 10, -sh - 2 + cw, -sw / 2 - 16, -sh + 4 + cw);
+          ctx.lineTo(-sw / 2 - 12, 0);
+          ctx.lineTo(-sw / 2, -2);
+          ctx.closePath();
+          ctx.fill();
+        }
+
         // Body (flat)
         ctx.fillStyle = skin.body;
-        roundRect(-sw / 2, -sh, sw, sh - 4, 5);
+        roundRect(-sw / 2, -sh, sw, sh - 4, skin.robot ? 2 : 5);
         ctx.fill();
+
+        // Frost: small spikes on sliding body
+        if (skin.frost) {
+          ctx.fillStyle = '#d0f0ff';
+          for (let i = -1; i <= 1; i++) {
+            ctx.beginPath();
+            ctx.moveTo(i * 10 - 3, -sh);
+            ctx.lineTo(i * 10, -sh - 6);
+            ctx.lineTo(i * 10 + 3, -sh);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+
+        // Robot panel line on slide body
+        if (skin.robot) {
+          ctx.strokeStyle = '#555';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-sw / 2 + 4, -sh / 2);
+          ctx.lineTo(sw / 2 - 14, -sh / 2);
+          ctx.stroke();
+        }
+
         // Visor (side-facing)
         ctx.fillStyle = skin.visorBg;
         roundRect(sw / 2 - 12, -sh + 3, 10, sh - 10, 3);
         ctx.fill();
         ctx.fillStyle = skin.visor;
-        roundRect(sw / 2 - 11, -sh + 5, 8, sh - 14, 2);
+        if (skin.ninja) {
+          roundRect(sw / 2 - 11, -sh + 6, 8, sh - 18, 1);
+        } else {
+          roundRect(sw / 2 - 11, -sh + 5, 8, sh - 14, 2);
+        }
         ctx.fill();
+
+        // Ninja scarf while sliding
+        if (skin.ninja) {
+          const w1 = Math.sin(frame * 0.12) * 5;
+          const w2 = Math.sin(frame * 0.1 + 2) * 7;
+          ctx.strokeStyle = skin.scarfColor;
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(-sw / 2 + 2, -sh + 4);
+          ctx.quadraticCurveTo(-sw / 2 - 10, -sh + 2 + w1, -sw / 2 - 18, -sh + 6 + w2);
+          ctx.stroke();
+        }
       } else {
         const lean = player.onGround ? Math.sin(player.legPhase * 0.5) * 0.08 : -0.15;
         ctx.rotate(lean);
 
         // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillStyle = skin.ghost ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.3)';
         ctx.beginPath();
-        ctx.ellipse(0, 2, pw * 0.6, 5, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 2, skin.ghost ? pw * 0.4 : pw * 0.6, skin.ghost ? 3 : 5, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Legs
-        ctx.strokeStyle = skin.legs;
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        if (player.onGround) {
-          const lp = player.legPhase;
-          ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-6 + Math.sin(lp) * 8, 0); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(6 - Math.sin(lp) * 8, 0); ctx.stroke();
-        } else {
-          ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-10, 4); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(10, 4); ctx.stroke();
+        // Legs (ghost floats - no legs)
+        if (!skin.ghost) {
+          ctx.strokeStyle = skin.legs;
+          ctx.lineWidth = skin.robot ? 6 : 5;
+          ctx.lineCap = skin.robot ? 'square' : 'round';
+          if (player.onGround) {
+            const lp = player.legPhase;
+            if (skin.robot) {
+              // Segmented robot legs with knee joints
+              const lkx = -6 + Math.sin(lp) * 4, rky = -5;
+              ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(lkx, rky); ctx.lineTo(-6 + Math.sin(lp) * 8, 0); ctx.stroke();
+              const rkx = 6 - Math.sin(lp) * 4;
+              ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(rkx, rky); ctx.lineTo(6 - Math.sin(lp) * 8, 0); ctx.stroke();
+              // Knee bolts
+              ctx.fillStyle = '#bbb';
+              ctx.beginPath(); ctx.arc(lkx, rky, 2, 0, Math.PI * 2); ctx.fill();
+              ctx.beginPath(); ctx.arc(rkx, rky, 2, 0, Math.PI * 2); ctx.fill();
+            } else {
+              ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-6 + Math.sin(lp) * 8, 0); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(6 - Math.sin(lp) * 8, 0); ctx.stroke();
+            }
+          } else {
+            if (skin.robot) {
+              ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-8, -3); ctx.lineTo(-10, 4); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(8, -3); ctx.lineTo(10, 4); ctx.stroke();
+              ctx.fillStyle = '#bbb';
+              ctx.beginPath(); ctx.arc(-8, -3, 2, 0, Math.PI * 2); ctx.fill();
+              ctx.beginPath(); ctx.arc(8, -3, 2, 0, Math.PI * 2); ctx.fill();
+            } else {
+              ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-10, 4); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(6, -10); ctx.lineTo(10, 4); ctx.stroke();
+            }
+          }
+        }
+
+        // Royal cape (behind body)
+        if (skin.royal) {
+          const capeWave = Math.sin(frame * 0.1 + player.legPhase * 0.3) * 4;
+          const capeWave2 = Math.sin(frame * 0.07 + 1.5) * 3;
+          ctx.fillStyle = skin.capeColor;
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 2, -ph + 14);
+          ctx.quadraticCurveTo(-pw / 2 - 10 + capeWave2, -ph / 2, -pw / 2 - 8 + capeWave, -6);
+          ctx.lineTo(-pw / 2 - 4 + capeWave * 0.5, -2);
+          ctx.lineTo(-pw / 2 + 2, -12);
+          ctx.closePath();
+          ctx.fill();
+          // Cape highlight
+          ctx.fillStyle = 'rgba(255,255,255,0.1)';
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 2, -ph + 14);
+          ctx.quadraticCurveTo(-pw / 2 - 4 + capeWave2 * 0.5, -ph / 2 + 4, -pw / 2 - 2 + capeWave * 0.5, -8);
+          ctx.lineTo(-pw / 2 + 2, -12);
+          ctx.closePath();
+          ctx.fill();
         }
 
         // Body
         ctx.fillStyle = skin.body;
-        roundRect(-pw / 2, -ph, pw, ph - 12, 6);
+        roundRect(-pw / 2, -ph, pw, ph - 12, skin.robot ? 2 : 6);
         ctx.fill();
+
+        // Ghost: ethereal glow around body
+        if (skin.ghost) {
+          ctx.shadowColor = '#c0d0e8';
+          ctx.shadowBlur = 12 + Math.sin(frame * 0.06) * 4;
+          ctx.fillStyle = 'rgba(184,198,219,0.15)';
+          roundRect(-pw / 2 - 2, -ph - 2, pw + 4, ph - 8, 8);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+
+        // Robot panel details
+        if (skin.robot) {
+          ctx.strokeStyle = '#555';
+          ctx.lineWidth = 1;
+          // Horizontal panel line
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 3, -ph + 22);
+          ctx.lineTo(pw / 2 - 3, -ph + 22);
+          ctx.stroke();
+          // Vertical center seam
+          ctx.beginPath();
+          ctx.moveTo(0, -ph + 22);
+          ctx.lineTo(0, -14);
+          ctx.stroke();
+          // Corner bolts
+          ctx.fillStyle = '#bbb';
+          ctx.beginPath(); ctx.arc(-pw / 2 + 5, -ph + 4, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(pw / 2 - 5, -ph + 4, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(-pw / 2 + 5, -14, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(pw / 2 - 5, -14, 2, 0, Math.PI * 2); ctx.fill();
+          // Power indicator
+          ctx.fillStyle = '#00ff44';
+          ctx.beginPath(); ctx.arc(0, -ph + 26, 2, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Frost: ice crystal spikes on shoulders
+        if (skin.frost) {
+          ctx.fillStyle = '#d0f0ff';
+          ctx.strokeStyle = '#a0d4f0';
+          ctx.lineWidth = 1;
+          // Left shoulder spike cluster
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 - 5, -ph + 16);
+          ctx.lineTo(-pw / 2, -ph + 2);
+          ctx.lineTo(-pw / 2 + 4, -ph + 16);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 - 2, -ph + 16);
+          ctx.lineTo(-pw / 2 - 4, -ph + 6);
+          ctx.lineTo(-pw / 2 + 1, -ph + 16);
+          ctx.closePath();
+          ctx.fill();
+          // Right shoulder spike cluster
+          ctx.beginPath();
+          ctx.moveTo(pw / 2 + 5, -ph + 16);
+          ctx.lineTo(pw / 2, -ph + 2);
+          ctx.lineTo(pw / 2 - 4, -ph + 16);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(pw / 2 + 2, -ph + 16);
+          ctx.lineTo(pw / 2 + 4, -ph + 6);
+          ctx.lineTo(pw / 2 - 1, -ph + 16);
+          ctx.closePath();
+          ctx.fill();
+          // Frost glow
+          ctx.shadowColor = '#80d0ff';
+          ctx.shadowBlur = 8;
+          ctx.fillStyle = 'rgba(176,224,255,0.08)';
+          roundRect(-pw / 2 - 2, -ph - 2, pw + 4, ph - 8, 8);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
 
         // Visor
         ctx.fillStyle = skin.visorBg;
-        roundRect(-pw / 2 + 4, -ph + 6, pw - 8, 14, 4);
-        ctx.fill();
-        ctx.fillStyle = skin.visor;
-        roundRect(-pw / 2 + 6, -ph + 8, pw - 12, 10, 3);
-        ctx.fill();
+        if (skin.ninja) {
+          // Narrow slit visor
+          roundRect(-pw / 2 + 4, -ph + 9, pw - 8, 6, 2);
+          ctx.fill();
+          ctx.fillStyle = skin.visor;
+          roundRect(-pw / 2 + 6, -ph + 10, pw - 12, 4, 1);
+          ctx.fill();
+        } else {
+          roundRect(-pw / 2 + 4, -ph + 6, pw - 8, 14, 4);
+          ctx.fill();
+          ctx.fillStyle = skin.visor;
+          roundRect(-pw / 2 + 6, -ph + 8, pw - 12, 10, 3);
+          ctx.fill();
+        }
+
+        // Robot: antenna with blinking light
+        if (skin.robot) {
+          ctx.strokeStyle = '#777';
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(0, -ph);
+          ctx.lineTo(2, -ph - 7);
+          ctx.stroke();
+          // Blinking light
+          const blink = frame % 40 < 20;
+          ctx.fillStyle = blink ? '#ff2020' : '#881010';
+          ctx.shadowColor = blink ? '#ff2020' : 'transparent';
+          ctx.shadowBlur = blink ? 6 : 0;
+          ctx.beginPath();
+          ctx.arc(2, -ph - 8, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+
+        // Royal: crown
+        if (skin.royal) {
+          ctx.fillStyle = skin.crownColor;
+          ctx.beginPath();
+          ctx.moveTo(-9, -ph + 1);
+          ctx.lineTo(-11, -ph - 7);
+          ctx.lineTo(-5, -ph - 4);
+          ctx.lineTo(0, -ph - 10);
+          ctx.lineTo(5, -ph - 4);
+          ctx.lineTo(11, -ph - 7);
+          ctx.lineTo(9, -ph + 1);
+          ctx.closePath();
+          ctx.fill();
+          // Crown base band
+          ctx.fillStyle = '#daa520';
+          roundRect(-9, -ph, 18, 3, 1);
+          ctx.fill();
+          // Crown gems
+          ctx.fillStyle = '#ff3366';
+          ctx.beginPath(); ctx.arc(0, -ph - 5, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#3366ff';
+          ctx.beginPath(); ctx.arc(-6, -ph - 3, 1.5, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(6, -ph - 3, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Ninja: trailing scarf ribbons
+        if (skin.ninja) {
+          const w1 = Math.sin(frame * 0.12 + 1) * 5;
+          const w2 = Math.sin(frame * 0.1 + 2.5) * 7;
+          const w3 = Math.sin(frame * 0.09 + 4) * 4;
+          ctx.strokeStyle = skin.scarfColor;
+          ctx.lineWidth = 3.5;
+          ctx.lineCap = 'round';
+          // Upper ribbon
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 1, -ph + 10);
+          ctx.quadraticCurveTo(-pw / 2 - 10, -ph + 12 + w1, -pw / 2 - 18 + w3, -ph + 15 + w2);
+          ctx.stroke();
+          // Lower ribbon
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 1, -ph + 13);
+          ctx.quadraticCurveTo(-pw / 2 - 8, -ph + 18 + w2 * 0.6, -pw / 2 - 15 + w1, -ph + 22 + w3);
+          ctx.stroke();
+        }
       }
 
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
 
@@ -1079,6 +1344,33 @@
           life: 1, decay: 0.04,
           r: Math.random() * 3 + 1.5,
           color: sk.body,
+        });
+      }
+
+      // Ghost wisp particles (drift downward from body)
+      const sk2 = getSkin();
+      if (sk2.ghost && frame % 5 === 0) {
+        particles.push({
+          x: player.x + player.w / 2 + (Math.random() - 0.5) * player.w,
+          y: player.y + player.h * 0.7 + Math.random() * 10,
+          vx: (Math.random() - 0.5) * 0.4,
+          vy: Math.random() * 0.6 + 0.2,
+          life: 0.45, decay: 0.02,
+          r: Math.random() * 3 + 1,
+          color: '#c0d0e8',
+        });
+      }
+
+      // Frost sparkle particles (drift around body)
+      if (sk2.frost && frame % 4 === 0) {
+        particles.push({
+          x: player.x + player.w / 2 + (Math.random() - 0.5) * player.w * 1.8,
+          y: player.y + Math.random() * player.h,
+          vx: (Math.random() - 0.5) * 0.8,
+          vy: -Math.random() * 0.8 - 0.2,
+          life: 0.7, decay: 0.04,
+          r: Math.random() * 2 + 0.5,
+          color: Math.random() > 0.5 ? '#d0f0ff' : '#ffffff',
         });
       }
 
