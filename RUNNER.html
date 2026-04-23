@@ -122,6 +122,30 @@
                [542,14,160],[562,9,220],[577,15,125],[598,11,175],[615,9,140],[631,13,200],
                [650,14,170],[670,10,130],[686,12,190],[704,14,155],[724,9,215],[739,16,120],
                [761,11,180],[778,9,145]] },
+      // Level 5 — Frozen tundra (icy blues)
+      { sky: '#0a1628', bldCol: '#1a3050', ground: '#5bc0eb', gFill: '#081220', gTile: '#3a8fbf',
+        blds: [[0,70,95],[75,50,130],[130,80,80],[215,45,145],[265,65,100],[335,55,120],
+               [395,75,90],[475,40,140],[520,60,105],[585,70,115],[660,50,135],[715,65,95],
+               [785,45,110]] },
+      // Level 6 — Volcanic (deep reds and magma orange)
+      { sky: '#1a0505', bldCol: '#3d0c0c', ground: '#ff6347', gFill: '#120303', gTile: '#cc3a2a',
+        blds: [[0,30,160],[35,25,110],[65,35,180],[105,20,130],[130,40,200],[175,25,150],
+               [205,30,170],[240,35,120],[280,20,190],[305,40,140],[350,25,165],[380,35,115],
+               [420,20,185],[445,30,145],[480,35,175],[520,25,125],[550,30,195],[585,40,135],
+               [630,20,160],[655,35,150],[695,25,180],[725,30,120],[760,35,170]] },
+      // Level 7 — Deep ocean (teals and navy)
+      { sky: '#020c15', bldCol: '#0a2540', ground: '#20b2aa', gFill: '#010810', gTile: '#168a84',
+        blds: [[0,90,75],[95,30,150],[130,70,90],[205,40,160],[250,85,70],[340,35,140],
+               [380,75,85],[460,30,155],[495,65,95],[565,90,80],[660,35,145],[700,70,90],
+               [775,40,130]] },
+      // Level 8 — Neon city (pink and cyan)
+      { sky: '#0d0221', bldCol: '#1a0a3e', ground: '#f72585', gFill: '#09011a', gTile: '#b5179e',
+        blds: [[0,22,200],[26,18,140],[48,24,210],[76,16,160],[96,28,190],[128,14,220],
+               [146,22,150],[172,18,180],[194,26,205],[224,14,135],[242,22,195],[268,18,165],
+               [290,26,215],[320,14,145],[338,22,185],[364,18,155],[386,26,200],[416,14,170],
+               [434,22,210],[460,18,140],[482,26,190],[512,14,160],[530,22,205],[556,18,175],
+               [578,26,215],[608,14,145],[626,22,185],[652,18,155],[674,26,200],[704,14,170],
+               [722,22,210],[748,18,140],[770,26,190]] },
     ];
     function getTheme() { return LEVEL_THEMES[Math.min(level - 1, LEVEL_THEMES.length - 1)]; }
 
@@ -137,7 +161,7 @@
     };
 
     // ---- State ----
-    let state = 'start'; // 'start' | 'shop' | 'running' | 'levelup' | 'dead'
+    let state = 'start'; // 'start' | 'shop' | 'running' | 'levelup' | 'boss' | 'victory' | 'dead'
     let score = 0;
     let hiScore = 0;
     let speed = 0;
@@ -156,6 +180,24 @@
     let comboTimer = 0;    // frames remaining before combo resets
     let comboText  = null; // reference to the active combo FloatText object
 
+    // ---- Boss ----
+    const BOSS_MAX_HP = 20;
+    let boss = null;
+    let victoryTimer = 0;
+    function initBoss() {
+      boss = {
+        x: W - 100, y: GROUND - 60,
+        w: 64, h: 80,
+        hp: BOSS_MAX_HP,
+        phase: 0,          // attack phase timer
+        hurtTimer: 0,      // flash when hit
+        bobPhase: 0,       // floating animation
+        attackCooldown: 0,  // frames until next attack
+        defeated: false,
+        deathTimer: 0,
+      };
+    }
+
     // ---- Player ----
     const player = {
       x: 100,
@@ -169,7 +211,7 @@
       legPhase: 0,
       sliding: false,
       slideTimer: 0,
-      dashAvailable: true,
+      diving: false,
     };
 
     // ---- Obstacles ----
@@ -215,7 +257,7 @@
       { key: 'longSlide',     name: 'LONG SLIDE',     desc: 'Longer slide, cancel by jumping',  cost: 2, color: '#f5a623' },
       { key: 'coinMagnet',    name: 'COIN MAGNET',    desc: 'Pull nearby coins toward you',     cost: 3, color: '#ffe066' },
       { key: 'diamondMagnet', name: 'GEM MAGNET',     desc: 'Pull nearby diamonds toward you',  cost: 2, color: '#40c9a2' },
-      { key: 'airDash',       name: 'AIR DASH',       desc: 'Press RIGHT while airborne',       cost: 3, color: '#7ee8fa' },
+      { key: 'dive',           name: 'DIVE',            desc: 'Press DOWN while airborne',        cost: 3, color: '#7ee8fa' },
       { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 2, color: '#e94560' },
       { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 2, color: '#ff6b35', type: 'skin' },
       { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 2, color: '#39ff14', type: 'skin' },
@@ -236,6 +278,61 @@
       stars = [];
       for (let i = 0; i < 60; i++) {
         stars.push({ x: Math.random() * W, y: Math.random() * GROUND * 0.8, r: Math.random() * 1.5 + 0.3, s: Math.random() * 0.3 + 0.1 });
+      }
+    }
+
+    // ---- Ambient background particles (per-level atmosphere) ----
+    let ambientParts = [];
+    function initAmbient() {
+      ambientParts = [];
+      const lv = Math.min(level, LEVEL_THEMES.length);
+      const count = [0, 25, 20, 0, 35, 30, 40, 50][lv - 1] || 0;
+      for (let i = 0; i < count; i++) {
+        ambientParts.push(makeAmbientParticle(true));
+      }
+    }
+    function makeAmbientParticle(randomX) {
+      const lv = Math.min(level, LEVEL_THEMES.length);
+      const p = { x: randomX ? Math.random() * W : W + Math.random() * 40,
+                  y: Math.random() * GROUND, r: 0, vx: 0, vy: 0, phase: Math.random() * Math.PI * 2 };
+      if (lv === 2) { // Fireflies
+        p.r = Math.random() * 2 + 1; p.vx = -0.3 - Math.random() * 0.5;
+        p.vy = Math.sin(p.phase) * 0.3;
+      } else if (lv === 4) { // Energy motes
+        p.r = Math.random() * 1.5 + 0.5; p.vx = -0.2 - Math.random() * 0.3;
+        p.vy = -0.5 - Math.random() * 0.8; p.y = GROUND - Math.random() * 60;
+      } else if (lv === 5) { // Snowflakes
+        p.r = Math.random() * 2.5 + 1; p.vx = -0.5 - Math.random() * 1;
+        p.vy = 0.8 + Math.random() * 1.2; p.y = randomX ? Math.random() * H : -5;
+      } else if (lv === 6) { // Embers
+        p.r = Math.random() * 2 + 0.5; p.vx = -0.3 + (Math.random() - 0.5) * 0.6;
+        p.vy = -1 - Math.random() * 1.5; p.y = FLOOR - Math.random() * 30;
+      } else if (lv === 7) { // Bubbles
+        p.r = Math.random() * 3 + 1; p.vx = (Math.random() - 0.5) * 0.4;
+        p.vy = -0.4 - Math.random() * 0.8; p.y = randomX ? Math.random() * GROUND : GROUND;
+      } else if (lv === 8) { // Rain
+        p.r = 1; p.vx = -2; p.vy = 6 + Math.random() * 3;
+        p.y = randomX ? Math.random() * H : -5;
+      }
+      return p;
+    }
+    function updateAmbient() {
+      for (let i = ambientParts.length - 1; i >= 0; i--) {
+        const p = ambientParts[i];
+        const lv = Math.min(level, LEVEL_THEMES.length);
+        p.x += p.vx; p.y += p.vy; p.phase += 0.03;
+        // Wobble for fireflies and snowflakes
+        if (lv === 2) p.vy = Math.sin(p.phase) * 0.4;
+        if (lv === 5) p.vx += Math.sin(p.phase) * 0.02;
+        // Recycle off-screen particles
+        if (p.x < -10 || p.y < -10 || p.y > H + 10) {
+          const vertical = (lv === 5 || lv === 6 || lv === 7 || lv === 8);
+          ambientParts[i] = makeAmbientParticle(vertical);
+          if (lv === 5) ambientParts[i].y = -5;                     // snow falls from top
+          if (lv === 6) ambientParts[i].y = FLOOR - Math.random() * 20; // embers rise from ground
+          if (lv === 7) ambientParts[i].y = GROUND;                 // bubbles rise from ground
+          if (lv === 8) ambientParts[i].y = -5;                     // rain falls from top
+        }
       }
     }
 
@@ -311,6 +408,9 @@
       level = 1;
       levelUpTimer = 0;
       nextLevelScore = 5000;
+      boss = null;
+      victoryTimer = 0;
+      initAmbient();
       floatingTexts = [];
       comboWorth = 0;
       comboTimer = 0;
@@ -324,13 +424,13 @@
       player.legPhase = 0;
       player.sliding = false;
       player.slideTimer = 0;
-      player.dashAvailable = true;
+      player.diving = false;
     }
 
     // ---- Jump ----
     function jump() {
       if (state === 'shop') return;
-      if (state === 'start') { state = 'running'; reset(); return; }
+      if (state === 'start' || state === 'victory') { state = 'running'; reset(); return; }
       if (state === 'dead') { state = 'running'; reset(); return; }
       if (player.sliding) {
         endSlide();
@@ -361,13 +461,13 @@
       player.y = GROUND;
     }
 
-    // ---- Air dash ----
-    function airDash() {
-      if (state !== 'running' || !upgrades.airDash) return;
-      if (player.onGround || player.sliding || !player.dashAvailable) return;
-      player.dashAvailable = false;
-      player.x += 120;
-      spawnParticles(player.x - 60, player.y + player.h / 2, getSkin().jump, 12);
+    // ---- Dive ----
+    function dive() {
+      if ((state !== 'running' && state !== 'boss') || !upgrades.dive) return;
+      if (player.onGround || player.sliding || player.diving) return;
+      player.diving = true;
+      player.vy = 14;
+      spawnParticles(player.x + player.w / 2, player.y, getSkin().jump, 8);
     }
 
     // ---- Touch detection ----
@@ -415,11 +515,10 @@
         return;
       }
       if (e.code === 'ArrowUp')    { e.preventDefault(); jump(); }
-      if (e.code === 'ArrowDown')  { e.preventDefault(); startSlide(); }
-      if (e.code === 'ArrowRight') { e.preventDefault(); airDash(); }
+      if (e.code === 'ArrowDown')  { e.preventDefault(); if (!player.onGround && !player.sliding) dive(); else startSlide(); }
       if (e.code === 'Space') {
         e.preventDefault();
-        if (state === 'start' || state === 'dead') jump();
+        if (state === 'start' || state === 'dead' || state === 'victory') jump();
       }
     });
 
@@ -513,18 +612,11 @@
 
       if (dist > SWIPE_THRESHOLD && dt < SWIPE_TIME) {
         // It's a swipe
-        if (Math.abs(dy) > Math.abs(dx)) {
-          // Vertical swipe
-          if (dy > 0) {
-            startSlide(); // swipe down
-          } else {
-            jump(); // swipe up
-          }
-        } else {
-          // Horizontal swipe right = air dash
-          if (dx > 0) {
-            airDash();
-          }
+        if (dy > 0 && Math.abs(dy) > Math.abs(dx)) {
+          // Swipe down — dive if airborne, slide if grounded
+          if (!player.onGround && !player.sliding) dive(); else startSlide();
+        } else if (dy < 0 && Math.abs(dy) > Math.abs(dx)) {
+          jump(); // swipe up
         }
       } else {
         // Tap = jump (or start/restart)
@@ -560,6 +652,10 @@
       [2, 2, 2, 2, 3, 2],   // level 2 — balanced
       [1, 2, 2, 3, 3, 3],   // level 3 — harder mix
       [0, 1, 2, 3, 3, 4],   // level 4 — mostly hard
+      [2, 3, 1, 2, 1, 3],   // level 5 — tall & low walls (tundra)
+      [1, 1, 3, 4, 2, 1],   // level 6 — wide & pairs (volcanic)
+      [2, 2, 2, 1, 4, 3],   // level 7 — overhead-heavy (ocean)
+      [1, 2, 2, 3, 3, 3],   // level 8 — balanced hard (neon city)
     ];
 
     function weightedPick(weights) {
@@ -575,7 +671,7 @@
     function makeObstacle() {
       const w = OBSTACLE_WEIGHTS[Math.min(level - 1, OBSTACLE_WEIGHTS.length - 1)];
       const kind = weightedPick(w);
-      const s = Math.min(1 + (level - 1) * 0.18, 1.7); // size scale, capped at 1.7×
+      const s = Math.min(1 + (level - 1) * 0.10, 1.5); // size scale, capped at 1.5×
       const sw = n => Math.round(n * s);
       if (kind === 0) return { x: W + 20, y: FLOOR,       w: sw(28), h: sw(30), type: 'ground' };
       if (kind === 1) return { x: W + 20, y: FLOOR,       w: sw(20), h: sw(54), type: 'ground' };
@@ -1252,14 +1348,18 @@
         levelUpTimer--;
         const progress = (130 - levelUpTimer) / 130;
         // Player runs toward portal (starts at progress 0.22, enters at 0.58)
+        const PORTAL_TARGET = 520;
+        const runFrames = Math.round(130 * (0.58 - 0.22)); // frames available to reach portal
+        const runSpeed = Math.max(1, (PORTAL_TARGET - 100) / runFrames); // px per frame to hit portal
         if (progress < 0.22) {
-          player.legPhase += speed * 0.12;
+          player.legPhase += runSpeed * 0.12;
         } else if (progress < 0.58) {
-          player.x += speed * 1.5;
-          player.legPhase += speed * 0.16;
+          player.x += runSpeed;
+          player.legPhase += runSpeed * 0.16;
         }
         // Background scrolls gently
         for (const s of stars) { s.x -= s.s * 1.5; if (s.x < 0) s.x = W; }
+        updateAmbient();
         for (let i = 0; i < groundTiles.length; i++) {
           groundTiles[i] -= speed * 0.6;
           if (groundTiles[i] + 40 < 0) groundTiles[i] += groundTiles.length * 40;
@@ -1272,14 +1372,22 @@
         if (levelUpTimer <= 0) {
           level++;
           player.x = 100;
-          nextLevelScore = score + 5000;
-          levelStartScore = score;
-          levelDiamondsSpawned = 0;
           obstacles = [];
           coins = [];
           diamonds = [];
-          invincible = 90;
-          state = 'running';
+          if (level > LEVEL_THEMES.length) {
+            // Boss level after final stage
+            initBoss();
+            invincible = 60;
+            state = 'boss';
+          } else {
+            nextLevelScore = score + 5000;
+            levelStartScore = score;
+            levelDiamondsSpawned = 0;
+            invincible = 90;
+            initAmbient();
+            state = 'running';
+          }
         }
         return;
       }
@@ -1287,12 +1395,15 @@
       // Always update diamond display (persistent currency)
       diamondEl.textContent = '\u25C6 ' + totalDiamonds;
 
-      if (state !== 'running') return;
+      if (state !== 'running' && state !== 'boss') return;
 
       frame++;
-      score++;
-      // Base speed scales with level + gradual increase within level
-      speed = 5 + (level - 1) * 3.5 + (score % 5000) / 700;
+      if (!(state === 'boss' && boss && boss.defeated)) score++;
+      // Base speed scales with level + gradual increase within level (plateaus after level 4)
+      const levelSpeed = Math.min((level - 1) * 2.0, 8);
+      speed = 5 + levelSpeed + (score % 5000) / 750;
+      // Slow down during boss defeat
+      if (state === 'boss' && boss && boss.defeated) speed *= Math.max(0, 1 - boss.deathTimer / 120);
 
       // Invincibility countdown
       if (invincible > 0) invincible--;
@@ -1313,16 +1424,14 @@
           player.vy = 0;
           player.onGround = true;
           player.jumpsLeft = upgrades.tripleJump ? 3 : 2;
-          player.dashAvailable = true;
+          // Dive landing impact
+          if (player.diving) {
+            player.diving = false;
+            spawnParticles(player.x + player.w / 2, FLOOR, getSkin().ground, 10);
+          }
         } else {
           player.onGround = false;
         }
-      }
-
-      // Air dash ease-back
-      if (player.x > 100) {
-        player.x += (100 - player.x) * 0.06;
-        if (Math.abs(player.x - 100) < 0.5) player.x = 100;
       }
 
       // Leg / dust animation
@@ -1374,27 +1483,98 @@
         });
       }
 
-      // Level-up check
-      if (score >= nextLevelScore) {
+      // Level-up check (not during boss)
+      if (state === 'running' && score >= nextLevelScore) {
         state = 'levelup';
         levelUpTimer = 130;
         spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#7ee8fa', 30);
         spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 15);
+        // Snap player to start position on the ground for portal run
+        player.x = 100;
+        player.y = GROUND;
+        player.vy = 0;
+        player.onGround = true;
+        player.sliding = false;
+        player.diving = false;
+        player.h = PLAYER_H;
         return;
       }
 
-      // Obstacles — gap shrinks each level
-      nextObstacle--;
-      if (nextObstacle <= 0) {
-        obstacles.push(makeObstacle());
-        const gapMin = Math.max(30, 65 - (level - 1) * 8);
-        const gapMax = Math.max(70, 120 - (level - 1) * 12);
-        nextObstacle = Math.floor(Math.random() * (gapMax - gapMin) + gapMin);
+      // ---- Boss update ----
+      if (state === 'boss' && boss && !boss.defeated) {
+        boss.bobPhase += 0.04;
+        boss.y = GROUND - 60 + Math.sin(boss.bobPhase) * 12;
+        if (boss.hurtTimer > 0) boss.hurtTimer--;
+
+        // Boss attacks — spawn obstacles from the boss position
+        boss.attackCooldown--;
+        if (boss.attackCooldown <= 0) {
+          boss.phase++;
+          const pattern = boss.phase % 5;
+          if (pattern === 0) {
+            // Ground obstacle
+            obstacles.push({ x: boss.x, y: FLOOR, w: 28, h: 30, type: 'ground' });
+          } else if (pattern === 1) {
+            // Overhead beam
+            obstacles.push({ x: boss.x, y: SLIDE_CLEAR, w: 72, h: 52, type: 'overhead' });
+          } else if (pattern === 2) {
+            // Tall + overhead combo
+            obstacles.push({ x: boss.x, y: FLOOR, w: 20, h: 54, type: 'ground' });
+            obstacles.push({ x: boss.x + 80, y: SLIDE_CLEAR, w: 60, h: 52, type: 'overhead' });
+          } else if (pattern === 3) {
+            // Pair
+            obstacles.push({ x: boss.x, y: FLOOR, w: 52, h: 42, type: 'ground', pair: true });
+          } else {
+            // Low wall
+            obstacles.push({ x: boss.x, y: SLIDE_CLEAR, w: 34, h: SLIDE_CLEAR, type: 'lowwall' });
+          }
+          // Boss flashes when attacking
+          boss.attackCooldown = Math.max(40, 70 - Math.floor((BOSS_MAX_HP - boss.hp) * 1.5));
+        }
+      }
+
+      // Handle boss defeat animation
+      if (state === 'boss' && boss && boss.defeated) {
+        boss.deathTimer++;
+        if (boss.deathTimer % 8 === 0) {
+          const ex = boss.x + Math.random() * boss.w - boss.w / 2;
+          const ey = boss.y + Math.random() * boss.h - boss.h / 2;
+          spawnParticles(ex, ey, '#ff4444', 6);
+          spawnParticles(ex, ey, '#ffaa00', 4);
+        }
+        if (boss.deathTimer >= 120) {
+          state = 'victory';
+          victoryTimer = 0;
+          if (score > hiScore) hiScore = score;
+        }
+      }
+
+      // Obstacles — gap shrinks each level (normal spawning only in running state)
+      if (state === 'running') {
+        nextObstacle--;
+        if (nextObstacle <= 0) {
+          obstacles.push(makeObstacle());
+          const gapMin = Math.max(35, 65 - (level - 1) * 5);
+          const gapMax = Math.max(75, 120 - (level - 1) * 8);
+          nextObstacle = Math.floor(Math.random() * (gapMax - gapMin) + gapMin);
+        }
       }
 
       for (let i = obstacles.length - 1; i >= 0; i--) {
         obstacles[i].x -= speed;
         if (obstacles[i].x + obstacles[i].w < 0) {
+          // Dodged! Damage boss if in boss state
+          if (state === 'boss' && boss && !boss.defeated) {
+            boss.hp--;
+            boss.hurtTimer = 12;
+            spawnParticles(boss.x, boss.y, '#ff4444', 8);
+            floatingTexts.push({ x: boss.x, y: boss.y - 30, text: '-1', color: '#ff4444', life: 40 });
+            if (boss.hp <= 0) {
+              boss.defeated = true;
+              boss.deathTimer = 0;
+              obstacles = [];
+            }
+          }
           obstacles.splice(i, 1);
           continue;
         }
@@ -1417,11 +1597,13 @@
         }
       }
 
-      // Coins
-      nextCoin--;
-      if (nextCoin <= 0) {
-        spawnCoinGroup();
-        nextCoin = Math.floor(Math.random() * 80 + 60);
+      // Coins (not during boss)
+      if (state !== 'boss') {
+        nextCoin--;
+        if (nextCoin <= 0) {
+          spawnCoinGroup();
+          nextCoin = Math.floor(Math.random() * 80 + 60);
+        }
       }
 
       for (let i = coins.length - 1; i >= 0; i--) {
@@ -1461,13 +1643,13 @@
         }
       }
 
-      // Diamonds — spawn at 2000 and 4000 distance into each level
+      // Diamonds — spawn at 2000 and 4000 distance into each level (not during boss)
       const levelDist = score - levelStartScore;
-      if (levelDiamondsSpawned < 1 && levelDist >= 2000) {
+      if (state !== 'boss' && levelDiamondsSpawned < 1 && levelDist >= 2000) {
         diamonds.push({ x: W + 20, y: GROUND - 60, r: 16, phase: Math.random() * Math.PI * 2 });
         levelDiamondsSpawned++;
       }
-      if (levelDiamondsSpawned < 2 && levelDist >= 4000) {
+      if (state !== 'boss' && levelDiamondsSpawned < 2 && levelDist >= 4000) {
         diamonds.push({ x: W + 20, y: GROUND - 60, r: 16, phase: Math.random() * Math.PI * 2 });
         levelDiamondsSpawned++;
       }
@@ -1539,6 +1721,9 @@
         if (s.x < 0) s.x = W;
       }
 
+      // Ambient background particles
+      updateAmbient();
+
       // Ground tiles scroll
       for (let i = 0; i < groundTiles.length; i++) {
         groundTiles[i] -= speed;
@@ -1550,7 +1735,378 @@
       hiEl.textContent = 'BEST: ' + hiScore;
       coinEl.textContent = '\u25cf ' + coinCount;
       livesEl.textContent = '\u2665'.repeat(Math.max(0, lives)) || '\u2661';
-      levelEl.textContent = 'LVL ' + level;
+      levelEl.textContent = state === 'boss' ? 'BOSS' : 'LVL ' + level;
+    }
+
+    // ---- Per-level silhouette shapes ----
+    function drawSilhouette(theme) {
+      const lv = Math.min(level, LEVEL_THEMES.length);
+      ctx.fillStyle = theme.bldCol;
+
+      if (lv === 2) {
+        // Cyber forest — trees with trunks and rounded canopies
+        for (const [x, w, h] of theme.blds) {
+          const trunkW = Math.max(4, w * 0.18);
+          const trunkH = h * 0.45;
+          const cx = x + w / 2;
+          // Trunk
+          ctx.fillRect(cx - trunkW / 2, GROUND - trunkH, trunkW, trunkH);
+          // Canopy — layered circles for organic feel
+          const canopyR = w * 0.45;
+          const canopyY = GROUND - trunkH - canopyR * 0.6;
+          ctx.beginPath();
+          ctx.arc(cx, canopyY, canopyR, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath();
+          ctx.arc(cx - canopyR * 0.4, canopyY + canopyR * 0.2, canopyR * 0.7, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath();
+          ctx.arc(cx + canopyR * 0.4, canopyY + canopyR * 0.2, canopyR * 0.7, 0, Math.PI * 2); ctx.fill();
+        }
+
+      } else if (lv === 3) {
+        // Desert — rolling dunes and mesa shapes
+        // Background dune wave
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND);
+        for (let px = 0; px <= W; px += 4) {
+          const dy = Math.sin(px * 0.006) * 35 + Math.sin(px * 0.015) * 18 + Math.sin(px * 0.003) * 25;
+          ctx.lineTo(px, GROUND - 50 - dy);
+        }
+        ctx.lineTo(W, GROUND); ctx.closePath(); ctx.fill();
+        // Mesa/butte accents on top of dunes
+        const mesas = [[80, 50, 40], [250, 35, 55], [450, 45, 35], [620, 40, 50], [760, 30, 45]];
+        for (const [mx, mw, mh] of mesas) {
+          ctx.beginPath();
+          ctx.moveTo(mx - mw * 0.7, GROUND - 50);
+          ctx.lineTo(mx - mw * 0.35, GROUND - 50 - mh);
+          ctx.lineTo(mx + mw * 0.35, GROUND - 50 - mh);
+          ctx.lineTo(mx + mw * 0.7, GROUND - 50);
+          ctx.closePath(); ctx.fill();
+        }
+
+      } else if (lv === 5) {
+        // Frozen tundra — jagged mountain peaks
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND);
+        for (const [x, w, h] of theme.blds) {
+          const peakX = x + w / 2;
+          const peakY = GROUND - h;
+          ctx.lineTo(x, GROUND - h * 0.15);
+          ctx.lineTo(peakX, peakY);
+          ctx.lineTo(x + w, GROUND - h * 0.2);
+        }
+        ctx.lineTo(W, GROUND); ctx.closePath(); ctx.fill();
+        // Snow caps — lighter triangles at peaks
+        ctx.fillStyle = '#2a4a6a';
+        for (const [x, w, h] of theme.blds) {
+          const peakX = x + w / 2;
+          const peakY = GROUND - h;
+          const capH = h * 0.25;
+          ctx.beginPath();
+          ctx.moveTo(peakX, peakY);
+          ctx.lineTo(peakX - w * 0.18, peakY + capH);
+          ctx.lineTo(peakX + w * 0.18, peakY + capH);
+          ctx.closePath(); ctx.fill();
+        }
+
+      } else if (lv === 7) {
+        // Deep ocean — coral reef mounds and sea fans
+        // Undulating reef base
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND);
+        for (let px = 0; px <= W; px += 4) {
+          const dy = Math.sin(px * 0.008) * 25 + Math.sin(px * 0.02) * 12 + Math.sin(px * 0.004) * 20;
+          ctx.lineTo(px, GROUND - 35 - dy);
+        }
+        ctx.lineTo(W, GROUND); ctx.closePath(); ctx.fill();
+        // Coral branches / fans on top
+        ctx.strokeStyle = theme.bldCol; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        const corals = [[60,55],[180,70],[310,50],[440,65],[570,55],[700,60]];
+        for (const [cx, ch] of corals) {
+          const baseY = GROUND - 40;
+          // Central stem
+          ctx.beginPath(); ctx.moveTo(cx, baseY); ctx.lineTo(cx, baseY - ch); ctx.stroke();
+          // Branches
+          for (let b = 1; b <= 3; b++) {
+            const by = baseY - ch * (b / 4);
+            const spread = 8 + b * 5;
+            ctx.beginPath(); ctx.moveTo(cx, by);
+            ctx.lineTo(cx - spread, by - 12 - b * 3); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx, by);
+            ctx.lineTo(cx + spread, by - 10 - b * 4); ctx.stroke();
+          }
+        }
+
+      } else {
+        // Default — rectangular building silhouettes (levels 1, 4, 6, 8)
+        for (const [x, w, h] of theme.blds) {
+          ctx.fillRect(x, GROUND - h, w, h);
+        }
+      }
+    }
+
+    // ---- Boss drawing ----
+    function drawBoss() {
+      if (!boss) return;
+      const bx = boss.x, by = boss.y, bw = boss.w, bh = boss.h;
+      ctx.save();
+
+      // Shake when hurt
+      const shake = boss.hurtTimer > 0 ? (Math.random() - 0.5) * 6 : 0;
+      ctx.translate(shake, 0);
+
+      // Death fade
+      if (boss.defeated) {
+        ctx.globalAlpha = Math.max(0, 1 - boss.deathTimer / 120);
+      }
+
+      // Shadow on ground
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(bx, FLOOR, bw * 0.5, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Body — dark angular shape
+      const bodyColor = boss.hurtTimer > 0 && boss.hurtTimer % 4 < 2 ? '#ff4444' : '#2a0a3a';
+      ctx.fillStyle = bodyColor;
+
+      // Main body (angular torso)
+      ctx.beginPath();
+      ctx.moveTo(bx - bw * 0.35, by + bh * 0.1);    // left shoulder
+      ctx.lineTo(bx - bw * 0.15, by - bh * 0.35);    // left neck
+      ctx.lineTo(bx + bw * 0.15, by - bh * 0.35);    // right neck
+      ctx.lineTo(bx + bw * 0.35, by + bh * 0.1);     // right shoulder
+      ctx.lineTo(bx + bw * 0.25, by + bh * 0.45);    // right hip
+      ctx.lineTo(bx - bw * 0.25, by + bh * 0.45);    // left hip
+      ctx.closePath(); ctx.fill();
+
+      // Head
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.moveTo(bx - bw * 0.2, by - bh * 0.3);
+      ctx.lineTo(bx, by - bh * 0.55);                 // crown
+      ctx.lineTo(bx + bw * 0.2, by - bh * 0.3);
+      ctx.closePath(); ctx.fill();
+
+      // Eye — glowing red
+      const eyePulse = 0.7 + Math.sin(frame * 0.08) * 0.3;
+      ctx.fillStyle = `rgba(255,30,30,${eyePulse})`;
+      ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.ellipse(bx, by - bh * 0.35, 6, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Arm spikes
+      ctx.fillStyle = bodyColor;
+      // Left arm
+      ctx.beginPath();
+      ctx.moveTo(bx - bw * 0.35, by + bh * 0.1);
+      ctx.lineTo(bx - bw * 0.6, by + bh * 0.05 + Math.sin(boss.bobPhase * 1.5) * 5);
+      ctx.lineTo(bx - bw * 0.3, by + bh * 0.25);
+      ctx.closePath(); ctx.fill();
+      // Right arm
+      ctx.beginPath();
+      ctx.moveTo(bx + bw * 0.35, by + bh * 0.1);
+      ctx.lineTo(bx + bw * 0.6, by + bh * 0.05 + Math.sin(boss.bobPhase * 1.5 + 1) * 5);
+      ctx.lineTo(bx + bw * 0.3, by + bh * 0.25);
+      ctx.closePath(); ctx.fill();
+
+      // Outline glow
+      ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 1.5;
+      ctx.shadowColor = '#a855f7'; ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(bx - bw * 0.35, by + bh * 0.1);
+      ctx.lineTo(bx - bw * 0.15, by - bh * 0.35);
+      ctx.lineTo(bx, by - bh * 0.55);
+      ctx.lineTo(bx + bw * 0.15, by - bh * 0.35);
+      ctx.lineTo(bx + bw * 0.35, by + bh * 0.1);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      // HP bar (drawn without shake/fade)
+      if (!boss.defeated) {
+        const barW = 120, barH = 8;
+        const barX = bx - barW / 2, barY = by - bh * 0.65 - 12;
+        ctx.fillStyle = '#1a1a2e'; ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+        ctx.fillStyle = '#330a0a'; ctx.fillRect(barX, barY, barW, barH);
+        const hpFrac = Math.max(0, boss.hp / BOSS_MAX_HP);
+        const hpCol = hpFrac > 0.5 ? '#a855f7' : hpFrac > 0.25 ? '#ff6b35' : '#ff2020';
+        ctx.fillStyle = hpCol;
+        ctx.fillRect(barX, barY, barW * hpFrac, barH);
+        ctx.shadowColor = hpCol; ctx.shadowBlur = 6;
+        ctx.fillRect(barX, barY, barW * hpFrac, barH);
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    // ---- Per-level animated background layers ----
+    function drawLevelBg(theme) {
+      const lv = Math.min(level, LEVEL_THEMES.length);
+      ctx.save();
+
+      if (lv === 2) {
+        // Cyber forest — fireflies glow
+        for (const p of ambientParts) {
+          const glow = 0.4 + Math.sin(p.phase * 3) * 0.3;
+          ctx.globalAlpha = glow;
+          ctx.fillStyle = '#40ff90';
+          ctx.shadowColor = '#40ff90'; ctx.shadowBlur = 10;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+
+      } else if (lv === 3) {
+        // Desert — heat shimmer waves
+        ctx.globalAlpha = 0.04;
+        ctx.fillStyle = '#e67e22';
+        for (let i = 0; i < 5; i++) {
+          const yy = GROUND - 20 - i * 18;
+          ctx.beginPath();
+          ctx.moveTo(0, yy);
+          for (let x = 0; x < W; x += 8) {
+            ctx.lineTo(x, yy + Math.sin((x + frame * 2) * 0.02 + i) * 6);
+          }
+          ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+        }
+
+      } else if (lv === 4) {
+        // Purple spires — pulsing energy lines between tall buildings
+        ctx.globalAlpha = 0.15 + Math.sin(frame * 0.04) * 0.1;
+        ctx.strokeStyle = '#a855f7'; ctx.lineWidth = 1.5;
+        ctx.shadowColor = '#a855f7'; ctx.shadowBlur = 8;
+        const blds = theme.blds;
+        for (let i = 0; i < blds.length - 1; i += 2) {
+          const [x1, w1, h1] = blds[i]; const [x2, w2, h2] = blds[i + 1];
+          const y1 = GROUND - h1 + 10; const y2 = GROUND - h2 + 10;
+          ctx.beginPath(); ctx.moveTo(x1 + w1 / 2, y1);
+          const mx = (x1 + w1 / 2 + x2 + w2 / 2) / 2;
+          const my = Math.min(y1, y2) - 15 + Math.sin(frame * 0.06 + i) * 8;
+          ctx.quadraticCurveTo(mx, my, x2 + w2 / 2, y2);
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        // Rising energy motes
+        for (const p of ambientParts) {
+          ctx.globalAlpha = 0.5 + Math.sin(p.phase * 2) * 0.3;
+          ctx.fillStyle = '#c084fc';
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+
+      } else if (lv === 5) {
+        // Frozen tundra — snowflakes + aurora borealis
+        // Aurora: gently waving translucent bands
+        for (let band = 0; band < 3; band++) {
+          const hue = 140 + band * 40 + Math.sin(frame * 0.01 + band) * 20;
+          ctx.globalAlpha = 0.06;
+          ctx.fillStyle = `hsl(${hue}, 80%, 60%)`;
+          ctx.beginPath(); ctx.moveTo(0, 30 + band * 25);
+          for (let x = 0; x <= W; x += 10) {
+            ctx.lineTo(x, 30 + band * 25 + Math.sin((x + frame * 0.8) * 0.008 + band * 2) * 20);
+          }
+          ctx.lineTo(W, 90 + band * 25); ctx.lineTo(0, 90 + band * 25); ctx.closePath(); ctx.fill();
+        }
+        // Snowflakes
+        for (const p of ambientParts) {
+          ctx.globalAlpha = 0.6 + Math.sin(p.phase) * 0.2;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+
+      } else if (lv === 6) {
+        // Volcanic — lava glow at ground + rising embers
+        // Lava glow gradient at bottom
+        const grad = ctx.createLinearGradient(0, FLOOR - 40, 0, FLOOR + 20);
+        grad.addColorStop(0, 'rgba(255,80,0,0)');
+        grad.addColorStop(0.7, 'rgba(255,60,0,0.12)');
+        grad.addColorStop(1, 'rgba(255,30,0,0.25)');
+        ctx.globalAlpha = 0.7 + Math.sin(frame * 0.03) * 0.15;
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, FLOOR - 40, W, 60);
+        // Embers
+        for (const p of ambientParts) {
+          const life = 1 - (FLOOR - p.y) / (FLOOR + 30);
+          ctx.globalAlpha = Math.max(0, Math.min(1, life * 0.9));
+          ctx.fillStyle = Math.random() > 0.5 ? '#ff6a00' : '#ff3800';
+          ctx.shadowColor = '#ff4500'; ctx.shadowBlur = 4;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+
+      } else if (lv === 7) {
+        // Deep ocean — light rays from above + bubbles
+        // God rays
+        ctx.globalAlpha = 0.04;
+        for (let i = 0; i < 5; i++) {
+          const bx = 100 + i * 160 + Math.sin(frame * 0.006 + i * 1.5) * 40;
+          const grad = ctx.createLinearGradient(bx, 0, bx + 30, GROUND);
+          grad.addColorStop(0, '#40e0d0');
+          grad.addColorStop(1, 'rgba(32,178,170,0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.moveTo(bx - 15, 0); ctx.lineTo(bx + 45, 0);
+          ctx.lineTo(bx + 80, GROUND); ctx.lineTo(bx - 50, GROUND);
+          ctx.closePath(); ctx.fill();
+        }
+        // Kelp — swaying vertical lines anchored at ground
+        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = '#0d6b5e'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        for (let k = 0; k < 8; k++) {
+          const kx = 50 + k * 105;
+          const kh = 50 + (k % 3) * 25;
+          ctx.beginPath();
+          ctx.moveTo(kx, GROUND);
+          for (let seg = 1; seg <= 5; seg++) {
+            const sy = GROUND - (kh / 5) * seg;
+            const sx = kx + Math.sin(frame * 0.025 + k + seg * 0.8) * (6 + seg * 2);
+            ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+        }
+        // Bubbles
+        for (const p of ambientParts) {
+          ctx.globalAlpha = 0.3 + Math.sin(p.phase * 2) * 0.15;
+          ctx.strokeStyle = '#60d8d0'; ctx.lineWidth = 1;
+          ctx.fillStyle = 'rgba(96,216,208,0.08)';
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+        }
+
+      } else if (lv === 8) {
+        // Neon city — rain streaks + scrolling neon signs on buildings
+        // Rain
+        ctx.strokeStyle = 'rgba(180,200,255,0.25)'; ctx.lineWidth = 1;
+        for (const p of ambientParts) {
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x + p.vx * 2, p.y + p.vy * 2);
+          ctx.stroke();
+        }
+        // Neon sign glow on some buildings
+        const signs = [
+          { x: 50, y: GROUND - 150, w: 30, h: 8, color: '#f72585' },
+          { x: 200, y: GROUND - 170, w: 25, h: 6, color: '#4cc9f0' },
+          { x: 380, y: GROUND - 160, w: 35, h: 8, color: '#7209b7' },
+          { x: 530, y: GROUND - 140, w: 28, h: 7, color: '#f72585' },
+          { x: 680, y: GROUND - 180, w: 32, h: 8, color: '#4cc9f0' },
+        ];
+        for (const s of signs) {
+          const pulse = 0.5 + Math.sin(frame * 0.05 + s.x * 0.1) * 0.3;
+          ctx.globalAlpha = pulse;
+          ctx.fillStyle = s.color;
+          ctx.shadowColor = s.color; ctx.shadowBlur = 15;
+          ctx.fillRect(s.x, s.y, s.w, s.h);
+          // Reflection line below
+          ctx.globalAlpha = pulse * 0.15;
+          ctx.fillRect(s.x, s.y + s.h + 2, s.w, 40);
+        }
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     // ---- Draw ----
@@ -1569,11 +2125,11 @@
         ctx.fill();
       }
 
-      // Distant city silhouette
-      ctx.fillStyle = theme.bldCol;
-      for (const [x, w, h] of theme.blds) {
-        ctx.fillRect(x, GROUND - h, w, h);
-      }
+      // Distant silhouette (per-level shape)
+      drawSilhouette(theme);
+
+      // Animated background layer
+      drawLevelBg(theme);
 
       // Ground line glow
       ctx.shadowColor = theme.ground;
@@ -1594,6 +2150,9 @@
 
       // Obstacles
       for (const ob of obstacles) drawObstacle(ob);
+
+      // Boss
+      if (state === 'boss' && boss) drawBoss();
 
       // Coins
       for (const c of coins) drawCoin(c);
@@ -1725,11 +2284,12 @@
           ctx.shadowBlur = 22;
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 48px Courier New';
-          ctx.fillText('LEVEL ' + (level + 1), W / 2, H / 2 - 8);
+          const isBossNext = level + 1 > LEVEL_THEMES.length;
+          ctx.fillText(isBossNext ? 'BOSS FIGHT' : 'LEVEL ' + (level + 1), W / 2, H / 2 - 8);
           ctx.shadowBlur = 0;
           ctx.font = '20px Courier New';
-          ctx.fillStyle = '#7ee8fa';
-          ctx.fillText('GET READY', W / 2, H / 2 + 26);
+          ctx.fillStyle = isBossNext ? '#ff4444' : '#7ee8fa';
+          ctx.fillText(isBossNext ? 'SURVIVE' : 'GET READY', W / 2, H / 2 + 26);
           ctx.globalAlpha = 1;
           ctx.textAlign = 'left';
         }
@@ -1746,7 +2306,7 @@
         ctx.font = '18px Courier New';
         ctx.fillStyle = '#aaa';
         if (isTouchDevice) {
-          ctx.fillText('TAP jump  \u2022  SWIPE \u2193 slide  \u2022  SWIPE \u2192 dash', W / 2, H / 2 + 14);
+          ctx.fillText('TAP jump  \u2022  SWIPE \u2193 slide / dive', W / 2, H / 2 + 14);
         } else {
           ctx.fillText('UP to jump  \u2022  DOWN to slide  \u2022  SPACE / TAP to start', W / 2, H / 2 + 14);
         }
@@ -1861,6 +2421,47 @@
         ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 60);
         ctx.textAlign = 'left';
       }
+
+      if (state === 'victory') {
+        victoryTimer++;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+
+        // Animated sparkle border
+        for (let i = 0; i < 12; i++) {
+          const angle = (victoryTimer * 0.02) + (i / 12) * Math.PI * 2;
+          const sx = W / 2 + Math.cos(angle) * 180;
+          const sy = H / 2 + Math.sin(angle) * 80;
+          const sparkle = 0.4 + Math.sin(victoryTimer * 0.06 + i) * 0.4;
+          ctx.globalAlpha = sparkle;
+          ctx.fillStyle = '#ffd700';
+          ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 10;
+          ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // Title
+        ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 20;
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 42px Courier New';
+        ctx.fillText('VICTORY!', W / 2, H / 2 - 40);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = COL.text;
+        ctx.font = '18px Courier New';
+        ctx.fillText('You defeated the boss!', W / 2, H / 2 - 6);
+
+        ctx.fillStyle = '#aaa';
+        ctx.font = '16px Courier New';
+        ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u25C6 ' + diamondCount, W / 2, H / 2 + 24);
+
+        ctx.fillStyle = '#7ee8fa';
+        ctx.font = '14px Courier New';
+        const restartMsg = isTouchDevice ? 'TAP to play again' : 'SPACE to play again';
+        ctx.fillText(restartMsg, W / 2, H / 2 + 54);
+        ctx.textAlign = 'left';
+      }
     }
 
     // ---- Loop ----
@@ -1871,6 +2472,7 @@
     }
 
     initStars();
+    initAmbient();
     initGround();
     loop();
   </script>
