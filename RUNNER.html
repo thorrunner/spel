@@ -230,6 +230,7 @@
     let levelDiamondsSpawned = 0;
 
     // ---- Shop / persistent upgrades ----
+    const REVIVE_COST = 10;
     let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
     let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
     let shopSelection = 0;
@@ -473,6 +474,22 @@
     // ---- Touch detection ----
     const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
+    // ---- Revive: pay diamonds to resume from where you died ----
+    function revive() {
+      if (state !== 'dead' || totalDiamonds < REVIVE_COST) return;
+      totalDiamonds -= REVIVE_COST;
+      saveDiamonds();
+      lives = 1;
+      invincible = 180;
+      endSlide();
+      player.y = GROUND;
+      player.h = PLAYER_H;
+      player.vy = 0;
+      player.onGround = true;
+      obstacles = obstacles.filter(o => o.x > W * 0.85);
+      state = (boss && !boss.defeated) ? 'boss' : 'running';
+    }
+
     // ---- Shop purchase logic (shared by keyboard & touch) ----
     function shopPurchase(idx) {
       if (idx === undefined) idx = shopSelection;
@@ -505,13 +522,17 @@
       if ((state === 'start' || state === 'dead') && e.code === 'KeyS') {
         e.preventDefault(); shopReturnState = state; state = 'shop'; shopSelection = 0; return;
       }
+      // Revive from dead screen
+      if (state === 'dead' && e.code === 'KeyR') {
+        e.preventDefault(); revive(); return;
+      }
       // Shop navigation
       if (state === 'shop') {
         e.preventDefault();
         if (e.code === 'ArrowUp') shopSelection = (shopSelection + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
         if (e.code === 'ArrowDown') shopSelection = (shopSelection + 1) % SHOP_ITEMS.length;
         if (e.code === 'Space' || e.code === 'Enter') shopPurchase();
-        if (e.code === 'Escape' || e.code === 'KeyS') state = shopReturnState;
+        if (e.code === 'KeyS') state = shopReturnState;
         return;
       }
       if (e.code === 'ArrowUp')    { e.preventDefault(); jump(); }
@@ -519,6 +540,12 @@
       if (e.code === 'Space') {
         e.preventDefault();
         if (state === 'start' || state === 'dead' || state === 'victory') jump();
+      }
+      if (e.code === 'KeyX' && (state === 'running' || state === 'boss')) {
+        e.preventDefault();
+        lives = 0;
+        state = 'dead';
+        if (score > hiScore) hiScore = score;
       }
     });
 
@@ -573,9 +600,18 @@
         return;
       }
 
+      // Dead: check if tapping REVIVE button area
+      if (state === 'dead' && totalDiamonds >= REVIVE_COST) {
+        if (cp.y > H / 2 + 30 - 14 && cp.y < H / 2 + 30 + 10 &&
+            cp.x > W / 2 - 140 && cp.x < W / 2 + 140) {
+          revive();
+          return;
+        }
+      }
+
       // Start/dead: check if tapping "SHOP" button area
       if (state === 'start' || state === 'dead') {
-        const shopBtnY = state === 'start' ? H / 2 + 44 : H / 2 + 60;
+        const shopBtnY = state === 'start' ? H / 2 + 44 : H / 2 + 80;
         if (cp.y > shopBtnY - 18 && cp.y < shopBtnY + 10 &&
             cp.x > W / 2 - 80 && cp.x < W / 2 + 80) {
           shopReturnState = state;
@@ -629,7 +665,38 @@
     // Mouse click fallback for non-touch devices (desktop with no keyboard)
     canvas.addEventListener('click', e => {
       if (isTouchDevice) return; // touch handled separately
-      if (state === 'shop') return;
+      const cp = pageToCanvas(e.pageX, e.pageY);
+
+      if (state === 'shop') {
+        const hit = shopHitTest(cp.x, cp.y);
+        if (hit === -2) {
+          state = shopReturnState;
+        } else if (hit >= 0) {
+          shopSelection = hit;
+          shopPurchase(hit);
+        }
+        return;
+      }
+
+      if (state === 'dead' && totalDiamonds >= REVIVE_COST) {
+        if (cp.y > H / 2 + 30 - 14 && cp.y < H / 2 + 30 + 10 &&
+            cp.x > W / 2 - 140 && cp.x < W / 2 + 140) {
+          revive();
+          return;
+        }
+      }
+
+      if (state === 'start' || state === 'dead') {
+        const shopBtnY = state === 'start' ? H / 2 + 44 : H / 2 + 80;
+        if (cp.y > shopBtnY - 18 && cp.y < shopBtnY + 10 &&
+            cp.x > W / 2 - 80 && cp.x < W / 2 + 80) {
+          shopReturnState = state;
+          state = 'shop';
+          shopSelection = 0;
+          return;
+        }
+      }
+
       jump();
     });
 
@@ -2409,16 +2476,23 @@
         ctx.textAlign = 'center';
         ctx.fillStyle = COL.ground;
         ctx.font = 'bold 42px Courier New';
-        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 40);
         ctx.fillStyle = COL.text;
         ctx.font = '20px Courier New';
-        ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u25C6 ' + diamondCount + '   \u2665\u00d7' + Math.max(0,lives), W / 2, H / 2 + 10);
+        ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u25C6 ' + diamondCount + '   \u2665\u00d7' + Math.max(0,lives), W / 2, H / 2);
+        // Revive option
+        const canRevive = totalDiamonds >= REVIVE_COST;
+        ctx.font = 'bold 16px Courier New';
+        ctx.fillStyle = canRevive ? '#7ee8fa' : '#555';
+        const reviveLabel = isTouchDevice ? 'TAP HERE \u2014 REVIVE \u25C6 ' + REVIVE_COST
+                                          : 'R \u2014 REVIVE \u25C6 ' + REVIVE_COST;
+        ctx.fillText(reviveLabel, W / 2, H / 2 + 30);
         ctx.font = '16px Courier New';
         ctx.fillStyle = '#aaa';
-        ctx.fillText(isTouchDevice ? 'TAP to restart' : 'SPACE / TAP to restart', W / 2, H / 2 + 38);
+        ctx.fillText(isTouchDevice ? 'TAP to restart' : 'SPACE / TAP to restart', W / 2, H / 2 + 58);
         ctx.fillStyle = '#40c9a2';
         ctx.font = 'bold 14px Courier New';
-        ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 60);
+        ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 80);
         ctx.textAlign = 'left';
       }
 
@@ -2440,6 +2514,78 @@
           ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
         }
         ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // Bag of diamonds dropped by the boss
+        const bagCx = W / 2, bagCy = FLOOR - 18;
+        ctx.save();
+        // Ground shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(bagCx, FLOOR + 2, 32, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Sack body
+        ctx.fillStyle = '#8b5a2b';
+        ctx.beginPath();
+        ctx.moveTo(bagCx - 9, bagCy - 18);
+        ctx.quadraticCurveTo(bagCx - 32, bagCy - 4, bagCx - 26, bagCy + 18);
+        ctx.quadraticCurveTo(bagCx, bagCy + 30, bagCx + 26, bagCy + 18);
+        ctx.quadraticCurveTo(bagCx + 32, bagCy - 4, bagCx + 9, bagCy - 18);
+        ctx.closePath(); ctx.fill();
+        // Right-side shading
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.beginPath();
+        ctx.moveTo(bagCx + 9, bagCy - 18);
+        ctx.quadraticCurveTo(bagCx + 32, bagCy - 4, bagCx + 26, bagCy + 18);
+        ctx.quadraticCurveTo(bagCx + 14, bagCy + 26, bagCx + 4, bagCy + 26);
+        ctx.lineTo(bagCx + 4, bagCy - 18);
+        ctx.closePath(); ctx.fill();
+        // Rope tie
+        ctx.strokeStyle = '#4a2e12'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(bagCx - 11, bagCy - 16);
+        ctx.lineTo(bagCx + 11, bagCy - 16);
+        ctx.stroke();
+        // Diamonds spilling from the top
+        const diamonds = [
+          { x: -12, y: -26, s: 5 },
+          { x:   0, y: -32, s: 6 },
+          { x:  12, y: -26, s: 5 },
+          { x:  -4, y: -22, s: 4 },
+          { x:   8, y: -22, s: 4 },
+        ];
+        for (const d of diamonds) {
+          const dx = bagCx + d.x, dy = bagCy + d.y;
+          ctx.fillStyle = '#7ee8fa';
+          ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.moveTo(dx, dy - d.s);
+          ctx.lineTo(dx + d.s * 0.7, dy);
+          ctx.lineTo(dx, dy + d.s);
+          ctx.lineTo(dx - d.s * 0.7, dy);
+          ctx.closePath(); ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.beginPath();
+          ctx.moveTo(dx, dy - d.s);
+          ctx.lineTo(dx + d.s * 0.35, dy - d.s * 0.3);
+          ctx.lineTo(dx, dy - d.s * 0.1);
+          ctx.lineTo(dx - d.s * 0.35, dy - d.s * 0.3);
+          ctx.closePath(); ctx.fill();
+        }
+        // Sparkles around the bag
+        for (let i = 0; i < 5; i++) {
+          const a = (victoryTimer * 0.05) + (i / 5) * Math.PI * 2;
+          const r = 38 + Math.sin(victoryTimer * 0.06 + i) * 4;
+          const sx = bagCx + Math.cos(a) * r;
+          const sy = bagCy + Math.sin(a) * r * 0.5;
+          const sp = 0.3 + Math.sin(victoryTimer * 0.09 + i * 1.3) * 0.5;
+          ctx.globalAlpha = Math.max(0, sp);
+          ctx.fillStyle = '#7ee8fa';
+          ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 6;
+          ctx.beginPath(); ctx.arc(sx, sy, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        ctx.restore();
 
         // Title
         ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 20;
