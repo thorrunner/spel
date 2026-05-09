@@ -181,7 +181,7 @@
     let comboText  = null; // reference to the active combo FloatText object
 
     // ---- Boss ----
-    const BOSS_MAX_HP = 20;
+    const BOSS_MAX_HP = 26;
     let boss = null;
     let victoryTimer = 0;
     function initBoss() {
@@ -233,6 +233,13 @@
     const REVIVE_COST = 10;
     let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
     let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
+    let ownedUpgrades = JSON.parse(localStorage.getItem('runner_ownedUpgrades') || 'null');
+    if (!ownedUpgrades) {
+      // Migration: existing players already own anything they have active.
+      ownedUpgrades = {};
+      for (const k in upgrades) if (upgrades[k]) ownedUpgrades[k] = true;
+      localStorage.setItem('runner_ownedUpgrades', JSON.stringify(ownedUpgrades));
+    }
     let shopSelection = 0;
     let shopReturnState = 'start';
 
@@ -272,6 +279,7 @@
       { key: 'diamondMagnet', name: 'GEM MAGNET',     desc: 'Pull nearby diamonds toward you',  cost: 2, color: '#40c9a2' },
       { key: 'dive',           name: 'DIVE',            desc: 'Press DOWN while airborne',        cost: 3, color: '#7ee8fa' },
       { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 2, color: '#e94560' },
+      { key: 'default',       name: 'DEFAULT SKIN',   desc: 'The original look',                cost: 0, color: '#a8dadc', type: 'skin' },
       { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 2, color: '#ff6b35', type: 'skin' },
       { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 2, color: '#39ff14', type: 'skin' },
       { key: 'ghost',         name: 'GHOST SKIN',     desc: 'Transparent phantom, floats',      cost: 3, color: '#b8c6db', type: 'skin' },
@@ -283,6 +291,7 @@
 
     function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
     function saveUpgrades() { localStorage.setItem('runner_upgrades', JSON.stringify(upgrades)); }
+    function saveOwnedUpgrades() { localStorage.setItem('runner_ownedUpgrades', JSON.stringify(ownedUpgrades)); }
     function saveActiveSkin() { localStorage.setItem('runner_activeSkin', activeSkin); }
     function saveOwnedSkins() { localStorage.setItem('runner_ownedSkins', JSON.stringify(ownedSkins)); }
     function saveLastSpinDate() { localStorage.setItem('runner_lastSpinDate', lastSpinDate); }
@@ -564,17 +573,49 @@
           saveActiveSkin();
         }
       } else {
-        if (!upgrades[item.key] && totalDiamonds >= item.cost) {
+        if (ownedUpgrades[item.key]) {
+          // Already owned — toggle active state on/off.
+          upgrades[item.key] = !upgrades[item.key];
+          saveUpgrades();
+        } else if (totalDiamonds >= item.cost) {
           totalDiamonds -= item.cost;
+          ownedUpgrades[item.key] = true;
           upgrades[item.key] = true;
           saveDiamonds();
           saveUpgrades();
+          saveOwnedUpgrades();
         }
       }
     }
 
+    // ---- Boss cheat: type 'boss' during gameplay to skip to boss fight ----
+    let cheatBuffer = '';
+    function goToBoss() {
+      obstacles = [];
+      coins = [];
+      diamonds = [];
+      spinTokens = [];
+      level = LEVEL_THEMES.length + 1;
+      player.x = 100;
+      initBoss();
+      invincible = 60;
+      state = 'boss';
+    }
+
     // ---- Input (keyboard) ----
     document.addEventListener('keydown', e => {
+      // Boss cheat code
+      if (state === 'running' || state === 'levelup') {
+        const ch = e.key && e.key.length === 1 ? e.key.toLowerCase() : '';
+        if (ch >= 'a' && ch <= 'z') {
+          cheatBuffer = (cheatBuffer + ch).slice(-4);
+          if (cheatBuffer === 'boss') {
+            cheatBuffer = '';
+            goToBoss();
+            return;
+          }
+        }
+      }
       // Open daily spin from start or dead screen
       if ((state === 'start' || state === 'dead') && e.code === 'KeyW') {
         e.preventDefault(); wheelReturnState = state; state = 'wheel'; return;
@@ -1767,7 +1808,7 @@
             obstacles.push({ x: boss.x, y: SLIDE_CLEAR, w: 34, h: SLIDE_CLEAR, type: 'lowwall' });
           }
           // Boss flashes when attacking
-          boss.attackCooldown = Math.max(40, 70 - Math.floor((BOSS_MAX_HP - boss.hp) * 1.5));
+          boss.attackCooldown = Math.max(32, 58 - Math.floor((BOSS_MAX_HP - boss.hp) * 1.4));
         }
       }
 
@@ -1811,6 +1852,11 @@
               boss.defeated = true;
               boss.deathTimer = 0;
               obstacles = [];
+              totalDiamonds += 50;
+              saveDiamonds();
+              spawnFloatText(boss.x, boss.y - 60, '+◆ 50', '#40c9a2');
+              spawnParticles(boss.x, boss.y - 30, '#40c9a2', 30);
+              spawnParticles(boss.x, boss.y - 30, '#ffffff', 16);
             }
           }
           obstacles.splice(i, 1);
@@ -2620,8 +2666,8 @@
           const y = 80 + vi * 28;
           const selected = idx === shopSelection;
           const isSkin = item.type === 'skin';
-          const owned = isSkin ? ownedSkins.includes(item.key) : upgrades[item.key];
-          const isActive = isSkin && activeSkin === item.key;
+          const owned = isSkin ? ownedSkins.includes(item.key) : !!ownedUpgrades[item.key];
+          const isActive = isSkin ? (activeSkin === item.key) : !!upgrades[item.key];
 
           // Selection highlight
           if (selected) {
@@ -2632,7 +2678,7 @@
           }
 
           // Item name
-          ctx.fillStyle = (owned && !isSkin) || isActive ? '#667' : item.color;
+          ctx.fillStyle = isActive ? '#667' : item.color;
           ctx.font = (selected ? 'bold ' : '') + '14px Courier New';
           ctx.fillText(item.name, W / 2 - 40, y + 4);
 
@@ -2640,12 +2686,9 @@
           if (isActive) {
             ctx.fillStyle = '#40c9a2'; ctx.font = 'bold 12px Courier New';
             ctx.fillText('ACTIVE', W / 2 + 185, y + 4);
-          } else if (owned && isSkin) {
-            ctx.fillStyle = '#888'; ctx.font = '12px Courier New';
-            ctx.fillText('EQUIP', W / 2 + 185, y + 4);
           } else if (owned) {
-            ctx.fillStyle = '#40c9a2'; ctx.font = 'bold 12px Courier New';
-            ctx.fillText('OWNED', W / 2 + 185, y + 4);
+            ctx.fillStyle = '#888'; ctx.font = '12px Courier New';
+            ctx.fillText(isSkin ? 'EQUIP' : 'OFF', W / 2 + 185, y + 4);
           } else {
             ctx.fillStyle = totalDiamonds >= item.cost ? '#40c9a2' : '#664444';
             ctx.font = 'bold 12px Courier New';
