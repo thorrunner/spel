@@ -161,7 +161,7 @@
     };
 
     // ---- State ----
-    let state = 'start'; // 'start' | 'shop' | 'running' | 'levelup' | 'boss' | 'victory' | 'dead'
+    let state = 'start'; // 'start' | 'shop' | 'wheel' | 'running' | 'levelup' | 'boss' | 'victory' | 'dead'
     let score = 0;
     let hiScore = 0;
     let speed = 0;
@@ -236,6 +236,18 @@
     let shopSelection = 0;
     let shopReturnState = 'start';
 
+    // ---- Daily Spin Wheel ----
+    const WHEEL_SEGMENTS = [1, 2, 3, 5, 1, 10, 2, 25];
+    const WHEEL_COLORS   = ['#ffe066','#7ee8fa','#a8dadc','#40c9a2','#ffe066','#f5a623','#7ee8fa','#e94560'];
+    let lastSpinDate = localStorage.getItem('runner_lastSpinDate') || '';
+    let extraSpins = parseInt(localStorage.getItem('runner_extraSpins') || '0');
+    let wheelReturnState = 'start';
+    let wheelAngle = 0, wheelStartAngle = 0, wheelTargetAngle = 0;
+    let wheelSpinning = false, wheelSpinFrame = 0, wheelSpinDuration = 180;
+    let wheelResultIdx = -1, wheelResultShown = 0, wheelRewardAmount = 0;
+    let spinTokens = [];
+    let nextSpinTokenAt = 0; // score threshold for next spawn (set in reset())
+
     // Skins
     let activeSkin = localStorage.getItem('runner_activeSkin') || 'default';
     let ownedSkins = JSON.parse(localStorage.getItem('runner_ownedSkins') || '["default"]');
@@ -273,6 +285,49 @@
     function saveUpgrades() { localStorage.setItem('runner_upgrades', JSON.stringify(upgrades)); }
     function saveActiveSkin() { localStorage.setItem('runner_activeSkin', activeSkin); }
     function saveOwnedSkins() { localStorage.setItem('runner_ownedSkins', JSON.stringify(ownedSkins)); }
+    function saveLastSpinDate() { localStorage.setItem('runner_lastSpinDate', lastSpinDate); }
+    function saveExtraSpins() { localStorage.setItem('runner_extraSpins', extraSpins); }
+
+    function todayKey() {
+      const d = new Date();
+      return d.getFullYear() + '-' +
+        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+        String(d.getDate()).padStart(2, '0');
+    }
+    function canSpinToday() { return lastSpinDate !== todayKey(); }
+    function canSpin() { return canSpinToday() || extraSpins > 0; }
+
+    function startWheelSpin() {
+      if (!canSpin() || wheelSpinning) return;
+      // Deduct now so closing the tab mid-spin doesn't grant a free retry.
+      if (canSpinToday()) {
+        lastSpinDate = todayKey();
+        saveLastSpinDate();
+      } else {
+        extraSpins--;
+        saveExtraSpins();
+      }
+      wheelResultIdx = Math.floor(Math.random() * WHEEL_SEGMENTS.length);
+      const segAngle = (Math.PI * 2) / WHEEL_SEGMENTS.length;
+      const segCenter = wheelResultIdx * segAngle + segAngle / 2;
+      const turns = 5 + Math.floor(Math.random() * 3);
+      let target = wheelAngle + turns * Math.PI * 2 + ((-Math.PI / 2) - segCenter - wheelAngle);
+      while (target < wheelAngle + turns * Math.PI * 2) target += Math.PI * 2;
+      wheelTargetAngle = target;
+      wheelStartAngle = wheelAngle;
+      wheelSpinFrame = 0;
+      wheelResultShown = 0;
+      wheelSpinning = true;
+    }
+
+    function finishWheelSpin() {
+      const reward = WHEEL_SEGMENTS[wheelResultIdx];
+      totalDiamonds += reward;
+      saveDiamonds();
+      wheelRewardAmount = reward;
+      wheelResultShown = 1;
+      wheelSpinning = false;
+    }
 
     // ---- Stars (background) ----
     function initStars() {
@@ -401,6 +456,8 @@
       diamondCount = 0;
       levelStartScore = 0;
       levelDiamondsSpawned = 0;
+      spinTokens = [];
+      nextSpinTokenAt = 2500 + Math.floor(Math.random() * 2500);
       particles = [];
       lives = upgrades.extraHeart ? 4 : 3;
       invincible = 0;
@@ -479,7 +536,7 @@
       if (state !== 'dead' || totalDiamonds < REVIVE_COST) return;
       totalDiamonds -= REVIVE_COST;
       saveDiamonds();
-      lives = 1;
+      lives = 3;
       invincible = 180;
       endSlide();
       player.y = GROUND;
@@ -518,6 +575,20 @@
 
     // ---- Input (keyboard) ----
     document.addEventListener('keydown', e => {
+      // Open daily spin from start or dead screen
+      if ((state === 'start' || state === 'dead') && e.code === 'KeyW') {
+        e.preventDefault(); wheelReturnState = state; state = 'wheel'; return;
+      }
+      // Wheel input
+      if (state === 'wheel') {
+        e.preventDefault();
+        if (e.code === 'Space' || e.code === 'Enter') {
+          if (canSpin() && !wheelSpinning) startWheelSpin();
+        } else if (e.code === 'KeyW' || e.code === 'Escape') {
+          if (!wheelSpinning) state = wheelReturnState;
+        }
+        return;
+      }
       // Open shop from start or dead screen
       if ((state === 'start' || state === 'dead') && e.code === 'KeyS') {
         e.preventDefault(); shopReturnState = state; state = 'shop'; shopSelection = 0; return;
@@ -588,6 +659,18 @@
 
       const cp = pageToCanvas(t.pageX, t.pageY);
 
+      // Wheel: handle tap on wheel or close strip
+      if (state === 'wheel') {
+        const cx = W / 2, cy = H / 2 + 6, R = 92;
+        const dx = cp.x - cx, dy = cp.y - cy;
+        if (cp.y > H - 24) {
+          if (!wheelSpinning) state = wheelReturnState;
+        } else if (Math.sqrt(dx * dx + dy * dy) <= R + 10) {
+          if (canSpin() && !wheelSpinning) startWheelSpin();
+        }
+        return;
+      }
+
       // Shop: handle taps on items
       if (state === 'shop') {
         const hit = shopHitTest(cp.x, cp.y);
@@ -620,12 +703,26 @@
           return;
         }
       }
+
+      // Start/dead: check if tapping "DAILY SPIN" button area
+      if (state === 'start' || state === 'dead') {
+        const wheelBtnY = state === 'start' ? H / 2 + 70 : H / 2 + 104;
+        if (cp.y > wheelBtnY - 14 && cp.y < wheelBtnY + 8 &&
+            cp.x > W / 2 - 100 && cp.x < W / 2 + 100) {
+          wheelReturnState = state;
+          state = 'wheel';
+          return;
+        }
+      }
     }, { passive: false });
 
     canvas.addEventListener('touchend', e => {
       e.preventDefault();
       const t = Array.from(e.changedTouches).find(ct => ct.identifier === touchId);
       if (!t) return;
+
+      // Wheel: ignore touchend (no swipe/tap-as-jump on wheel)
+      if (state === 'wheel') { touchId = null; return; }
 
       // Shop: swipe up/down to scroll selection
       if (state === 'shop') {
@@ -667,6 +764,17 @@
       if (isTouchDevice) return; // touch handled separately
       const cp = pageToCanvas(e.pageX, e.pageY);
 
+      if (state === 'wheel') {
+        const cx = W / 2, cy = H / 2 + 6, R = 92;
+        const dx = cp.x - cx, dy = cp.y - cy;
+        if (cp.y > H - 24) {
+          if (!wheelSpinning) state = wheelReturnState;
+        } else if (Math.sqrt(dx * dx + dy * dy) <= R + 10) {
+          if (canSpin() && !wheelSpinning) startWheelSpin();
+        }
+        return;
+      }
+
       if (state === 'shop') {
         const hit = shopHitTest(cp.x, cp.y);
         if (hit === -2) {
@@ -693,6 +801,16 @@
           shopReturnState = state;
           state = 'shop';
           shopSelection = 0;
+          return;
+        }
+      }
+
+      if (state === 'start' || state === 'dead') {
+        const wheelBtnY = state === 'start' ? H / 2 + 70 : H / 2 + 104;
+        if (cp.y > wheelBtnY - 14 && cp.y < wheelBtnY + 8 &&
+            cp.x > W / 2 - 100 && cp.x < W / 2 + 100) {
+          wheelReturnState = state;
+          state = 'wheel';
           return;
         }
       }
@@ -1398,6 +1516,44 @@
       ctx.restore();
     }
 
+    function drawSpinToken(s) {
+      const bob = Math.sin(frame * 0.05 + s.phase) * 4;
+      const cy = s.y + bob;
+      const r = s.r;
+      const pulse = 0.7 + Math.sin(frame * 0.1 + s.phase) * 0.3;
+      const rot = frame * 0.03 + s.phase;
+
+      ctx.save();
+      ctx.translate(s.x, cy);
+      ctx.rotate(rot);
+
+      ctx.shadowColor = '#ffe066';
+      ctx.shadowBlur = 22 * pulse;
+
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = (i * Math.PI) / 5 - Math.PI / 2;
+        const rr = i % 2 === 0 ? r : r * 0.45;
+        const x = Math.cos(a) * rr;
+        const y = Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#ffe066';
+      ctx.fill();
+      ctx.strokeStyle = '#7a5a00';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(-r * 0.18, -r * 0.18, r * 0.18, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+
     // ---- Ground segments ----
     let groundTiles = [];
     function initGround() {
@@ -1461,6 +1617,21 @@
 
       // Always update diamond display (persistent currency)
       diamondEl.textContent = '\u25C6 ' + totalDiamonds;
+
+      if (state === 'wheel') {
+        if (wheelSpinning) {
+          wheelSpinFrame++;
+          const t = Math.min(1, wheelSpinFrame / wheelSpinDuration);
+          const eased = 1 - Math.pow(1 - t, 3);
+          wheelAngle = wheelStartAngle + (wheelTargetAngle - wheelStartAngle) * eased;
+          if (t >= 1) finishWheelSpin();
+        } else if (wheelResultShown > 0) {
+          wheelResultShown++;
+        } else {
+          wheelAngle += 0.004;
+        }
+        return;
+      }
 
       if (state !== 'running' && state !== 'boss') return;
 
@@ -1750,6 +1921,30 @@
           spawnParticles(d.x, dy, '#40c9a2', 20);
           spawnParticles(d.x, dy, '#ffffff', 10);
           spawnFloatText(d.x, dy - 20, '+\u25C6', '#40c9a2');
+        }
+      }
+
+      // Spin tokens \u2014 rare collectibles that grant +1 wheel spin
+      if (state !== 'boss' && score >= nextSpinTokenAt) {
+        spinTokens.push({ x: W + 20, y: GROUND - 50 - Math.floor(Math.random() * 60), r: 14, phase: Math.random() * Math.PI * 2 });
+        nextSpinTokenAt = score + 4000 + Math.floor(Math.random() * 4000);
+      }
+
+      for (let i = spinTokens.length - 1; i >= 0; i--) {
+        const s = spinTokens[i];
+        s.x -= speed;
+        if (s.x + s.r < 0) { spinTokens.splice(i, 1); continue; }
+        const bob = Math.sin(frame * 0.05 + s.phase) * 4;
+        const sy = s.y + bob;
+        if (s.x + s.r > player.x && s.x - s.r < player.x + player.w &&
+            sy + s.r > player.y && sy - s.r < player.y + player.h) {
+          spinTokens.splice(i, 1);
+          extraSpins++;
+          saveExtraSpins();
+          score += 500;
+          spawnParticles(s.x, sy, '#ffe066', 24);
+          spawnParticles(s.x, sy, '#ffffff', 12);
+          spawnFloatText(s.x, sy - 20, '+1 SPIN', '#ffe066');
         }
       }
 
@@ -2226,6 +2421,7 @@
 
       // Diamonds
       for (const d of diamonds) drawDiamond(d);
+      for (const s of spinTokens) drawSpinToken(s);
 
       // Particles
       for (const p of particles) {
@@ -2381,6 +2577,17 @@
         ctx.fillStyle = '#40c9a2';
         ctx.font = 'bold 16px Courier New';
         ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 44);
+        // Daily spin button
+        const spinAvailable = canSpin();
+        ctx.fillStyle = spinAvailable ? '#ffe066' : '#665533';
+        ctx.font = 'bold 16px Courier New';
+        const spinLabel = (isTouchDevice ? '\u2605 DAILY SPIN' : 'W \u2014 DAILY SPIN') +
+                          (extraSpins > 0 ? ' (+' + extraSpins + ')' : '');
+        ctx.fillText(spinLabel, W / 2, H / 2 + 70);
+        if (!spinAvailable) {
+          ctx.fillStyle = '#555'; ctx.font = '11px Courier New';
+          ctx.fillText('next spin tomorrow', W / 2, H / 2 + 84);
+        }
         ctx.textAlign = 'left';
       }
 
@@ -2470,6 +2677,82 @@
         ctx.textAlign = 'left';
       }
 
+      if (state === 'wheel') {
+        ctx.fillStyle = 'rgba(0,0,0,0.82)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+
+        ctx.shadowColor = '#ffe066'; ctx.shadowBlur = 14;
+        ctx.fillStyle = '#ffe066';
+        ctx.font = 'bold 24px Courier New';
+        ctx.fillText('DAILY SPIN', W / 2, 26);
+        ctx.shadowBlur = 0;
+
+        const cx = W / 2, cy = H / 2 - 4, R = 76;
+        const segAngle = (Math.PI * 2) / WHEEL_SEGMENTS.length;
+        for (let i = 0; i < WHEEL_SEGMENTS.length; i++) {
+          const a0 = wheelAngle + i * segAngle;
+          const a1 = a0 + segAngle;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, R, a0, a1);
+          ctx.closePath();
+          ctx.fillStyle = WHEEL_COLORS[i];
+          ctx.fill();
+          ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 2; ctx.stroke();
+          const mid = a0 + segAngle / 2;
+          ctx.save();
+          ctx.translate(cx + Math.cos(mid) * R * 0.62, cy + Math.sin(mid) * R * 0.62);
+          ctx.rotate(mid + Math.PI / 2);
+          ctx.fillStyle = '#1a1a2e'; ctx.font = 'bold 14px Courier New';
+          ctx.fillText('◆' + WHEEL_SEGMENTS[i], 0, 5);
+          ctx.restore();
+        }
+        ctx.beginPath(); ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a1a2e'; ctx.fill();
+        ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2; ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - R - 10);
+        ctx.lineTo(cx - 8, cy - R + 4);
+        ctx.lineTo(cx + 8, cy - R + 4);
+        ctx.closePath();
+        ctx.fillStyle = '#e94560'; ctx.fill();
+        ctx.strokeStyle = '#1a1a2e'; ctx.stroke();
+
+        ctx.font = 'bold 15px Courier New';
+        if (wheelSpinning) {
+          ctx.fillStyle = '#888'; ctx.fillText('SPINNING...', W / 2, cy + R + 18);
+        } else if (wheelResultShown > 0) {
+          ctx.fillStyle = '#40c9a2';
+          ctx.fillText('+ ◆ ' + wheelRewardAmount + ' DIAMONDS!', W / 2, cy + R + 18);
+          ctx.font = '11px Courier New';
+          if (canSpin()) {
+            ctx.fillStyle = '#ffe066';
+            ctx.fillText(isTouchDevice ? 'TAP WHEEL — SPIN AGAIN' : 'SPACE — SPIN AGAIN', W / 2, cy + R + 34);
+          } else {
+            ctx.fillStyle = '#888';
+            ctx.fillText('COME BACK TOMORROW', W / 2, cy + R + 34);
+          }
+        } else if (canSpin()) {
+          ctx.fillStyle = '#40c9a2';
+          ctx.fillText(isTouchDevice ? 'TAP WHEEL TO SPIN' : 'SPACE TO SPIN', W / 2, cy + R + 18);
+        } else {
+          ctx.fillStyle = '#888';
+          ctx.fillText('COME BACK TOMORROW', W / 2, cy + R + 18);
+        }
+
+        // Extra spins counter (always visible if you have any)
+        if (extraSpins > 0) {
+          ctx.fillStyle = '#ffe066'; ctx.font = 'bold 11px Courier New';
+          ctx.fillText('★ EXTRA SPINS: ' + extraSpins, W / 2, cy + R + 50);
+        }
+
+        ctx.fillStyle = '#555'; ctx.font = '10px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP HERE to close' : 'ESC / W to close', W / 2, H - 6);
+        ctx.textAlign = 'left';
+      }
+
       if (state === 'dead') {
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(0, 0, W, H);
@@ -2493,6 +2776,12 @@
         ctx.fillStyle = '#40c9a2';
         ctx.font = 'bold 14px Courier New';
         ctx.fillText(isTouchDevice ? '\u25C6 SHOP' : 'S \u2014 SHOP', W / 2, H / 2 + 80);
+        const spinAvailable = canSpin();
+        ctx.fillStyle = spinAvailable ? '#ffe066' : '#665533';
+        ctx.font = 'bold 14px Courier New';
+        const spinLabel = (isTouchDevice ? '\u2605 DAILY SPIN' : 'W \u2014 DAILY SPIN') +
+                          (extraSpins > 0 ? ' (+' + extraSpins + ')' : '');
+        ctx.fillText(spinLabel, W / 2, H / 2 + 104);
         ctx.textAlign = 'left';
       }
 
