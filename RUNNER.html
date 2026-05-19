@@ -255,6 +255,70 @@
     let spinTokens = [];
     let nextSpinTokenAt = 0; // score threshold for next spawn (set in reset())
 
+    // ---- Online Presence (Firebase Realtime DB) ----
+    // SETUP (~5 min, gratis):
+    //   1) Ga naar https://console.firebase.google.com → "Add project" (Spark/free plan)
+    //   2) Build → Realtime Database → Create database (regio bv. europe-west1)
+    //   3) Tabblad "Rules" → vervang door:  { "rules": { ".read": true, ".write": true } }  → Publish
+    //   4) Kopieer de DB-URL uit het Data-tabblad en plak hieronder (bv. https://jouwproject-default-rtdb.europe-west1.firebasedatabase.app)
+    const PRESENCE_URL = ''; // leeg = uit
+    let playerId = localStorage.getItem('runner_playerId') ||
+      (localStorage.setItem('runner_playerId', 'p' + Math.random().toString(36).slice(2, 11)),
+       localStorage.getItem('runner_playerId'));
+    let playerName = localStorage.getItem('runner_playerName') || '';
+    let onlinePlayers = []; // [{id, name, lastSeen}]
+    const presenceEnabled = !!PRESENCE_URL;
+
+    function setPlayerName(n) {
+      n = (n || '').trim().slice(0, 12);
+      if (!n) return;
+      playerName = n;
+      localStorage.setItem('runner_playerName', n);
+    }
+    if (presenceEnabled && !playerName) {
+      try {
+        const n = window.prompt('Kies een naam (max 12 tekens):', '');
+        setPlayerName(n);
+      } catch (e) { /* prompt may be blocked */ }
+      if (!playerName) setPlayerName('Player' + Math.floor(1000 + Math.random() * 9000));
+    }
+
+    async function presenceHeartbeat() {
+      if (!presenceEnabled || !playerName) return;
+      try {
+        await fetch(PRESENCE_URL + '/presence/' + playerId + '.json', {
+          method: 'PUT',
+          body: JSON.stringify({ name: playerName, lastSeen: Date.now() }),
+        });
+      } catch (e) {}
+    }
+    async function presencePoll() {
+      if (!presenceEnabled) return;
+      try {
+        const r = await fetch(PRESENCE_URL + '/presence.json');
+        if (!r.ok) return;
+        const data = (await r.json()) || {};
+        const cutoff = Date.now() - 20000;
+        onlinePlayers = Object.entries(data)
+          .map(([id, v]) => v ? { id, name: v.name, lastSeen: v.lastSeen } : null)
+          .filter(p => p && p.name && p.lastSeen >= cutoff)
+          .sort((a, b) => b.lastSeen - a.lastSeen);
+      } catch (e) {}
+    }
+    function presenceCleanup() {
+      if (!presenceEnabled || !playerName) return;
+      try {
+        fetch(PRESENCE_URL + '/presence/' + playerId + '.json', { method: 'DELETE', keepalive: true });
+      } catch (e) {}
+    }
+    if (presenceEnabled) {
+      presenceHeartbeat(); presencePoll();
+      setInterval(presenceHeartbeat, 8000);
+      setInterval(presencePoll, 8000);
+      window.addEventListener('beforeunload', presenceCleanup);
+      window.addEventListener('pagehide', presenceCleanup);
+    }
+
     // Skins
     let activeSkin = localStorage.getItem('runner_activeSkin') || 'default';
     let ownedSkins = JSON.parse(localStorage.getItem('runner_ownedSkins') || '["default"]');
@@ -2634,6 +2698,28 @@
           ctx.fillStyle = '#555'; ctx.font = '11px Courier New';
           ctx.fillText('next spin tomorrow', W / 2, H / 2 + 84);
         }
+
+        // Online players panel (top-right)
+        if (presenceEnabled) {
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#7ee8fa';
+          ctx.font = 'bold 12px Courier New';
+          ctx.fillText('ONLINE: ' + onlinePlayers.length, W - 12, 18);
+          ctx.font = '11px Courier New';
+          ctx.fillStyle = '#cfe9f5';
+          const maxShow = 6;
+          for (let i = 0; i < Math.min(onlinePlayers.length, maxShow); i++) {
+            const p = onlinePlayers[i];
+            const isMe = p.id === playerId;
+            ctx.fillStyle = isMe ? '#ffe066' : '#cfe9f5';
+            ctx.fillText('• ' + p.name + (isMe ? ' (you)' : ''), W - 12, 34 + i * 14);
+          }
+          if (onlinePlayers.length > maxShow) {
+            ctx.fillStyle = '#888';
+            ctx.fillText('+' + (onlinePlayers.length - maxShow) + ' more', W - 12, 34 + maxShow * 14);
+          }
+        }
+
         ctx.textAlign = 'left';
       }
 
