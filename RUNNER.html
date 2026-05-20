@@ -170,6 +170,12 @@
     let stars = [];
     let lives = 3;
     let invincible = 0;    // countdown frames of hit-invincibility
+    let screenShake = 0;   // frames remaining of screen shake
+    let shakeMag = 0;      // current shake magnitude in pixels
+    function triggerShake(mag, frames) {
+      screenShake = Math.max(screenShake, frames);
+      shakeMag = Math.max(shakeMag, mag);
+    }
     let totalCoins = 0;    // cumulative coins this run (for 1-up milestone)
     let nextLifeAt = 50;   // coin total at which next extra life is awarded
     let level = 1;
@@ -181,7 +187,7 @@
     let comboText  = null; // reference to the active combo FloatText object
 
     // ---- Boss ----
-    const BOSS_MAX_HP = 26;
+    const BOSS_MAX_HP = 35;
     let boss = null;
     let victoryTimer = 0;
     function initBoss() {
@@ -218,6 +224,10 @@
     let obstacles = [];
     let nextObstacle = 80;
 
+    // ---- Floating platforms (green blocks you can land on) ----
+    let platforms = [];
+    let nextPlatformAt = 0;
+
     // ---- Coins ----
     let coins = [];
     let coinCount = 0;
@@ -228,9 +238,11 @@
     let diamondCount = 0;
     let levelStartScore = 0;
     let levelDiamondsSpawned = 0;
+    let diamondBags = [];
+    let nextDiamondBagAt = 0; // score threshold for next rare bag spawn
 
     // ---- Shop / persistent upgrades ----
-    const REVIVE_COST = 10;
+    const REVIVE_COST = 15;
     let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
     let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
     let ownedUpgrades = JSON.parse(localStorage.getItem('runner_ownedUpgrades') || 'null');
@@ -332,25 +344,37 @@
       ninja:   { body: '#2a2a2a', visor: '#cc0000', visorBg: '#111111', legs: '#1a1a1a', jump: '#444444', ninja: true, scarfColor: '#cc0000' },
       frost:   { body: '#b0e0ff', visor: '#ffffff', visorBg: '#1a3050', legs: '#80b8d8', jump: '#d0f0ff', frost: true },
       royal:   { body: '#8b1a8b', visor: '#ffd700', visorBg: '#2a0a2a', legs: '#6b0a6b', jump: '#c040c0', royal: true, capeColor: '#c020c0', crownColor: '#ffd700' },
+      galaxy:  { body: '#1a0a3a', visor: '#ffffff', visorBg: '#0a0030', legs: '#0a0520', jump: '#6a4ac0', galaxy: true },
+      dragon:  { body: '#1e5a2e', visor: '#ffaa00', visorBg: '#0a2010', legs: '#0e3a1e', jump: '#40c060', dragon: true },
+      rainbow: { body: '#ff0044', visor: '#ffffff', visorBg: '#2a0040', legs: '#cc0044', jump: '#ff80c0', rainbow: true },
+      dinosaur:{ body: '#3a8a3a', visor: '#ffe040', visorBg: '#0a2a0a', legs: '#256a25', jump: '#5fbf5f', dinosaur: true },
+      phoenix: { body: '#e84a0e', visor: '#fff080', visorBg: '#2a0808', legs: '#b03208', jump: '#ffb040', phoenix: true },
+      alien:   { body: '#7a40c0', visor: '#80ffaa', visorBg: '#1a0030', legs: '#5a2090', jump: '#a070ff', alien: true },
     };
     function getSkin() { return SKINS[activeSkin] || SKINS.default; }
 
     const SHOP_ITEMS = [
-      { key: 'tripleJump',    name: 'TRIPLE JUMP',    desc: '3 jumps instead of 2',            cost: 3, color: '#a8dadc' },
-      { key: 'extraHeart',    name: 'EXTRA HEART',    desc: 'Start with 4 lives',              cost: 2, color: '#ff6b8a' },
-      { key: 'longSlide',     name: 'LONG SLIDE',     desc: 'Longer slide, cancel by jumping',  cost: 2, color: '#f5a623' },
-      { key: 'coinMagnet',    name: 'COIN MAGNET',    desc: 'Pull nearby coins toward you',     cost: 3, color: '#ffe066' },
-      { key: 'diamondMagnet', name: 'GEM MAGNET',     desc: 'Pull nearby diamonds toward you',  cost: 2, color: '#40c9a2' },
-      { key: 'dive',           name: 'DIVE',            desc: 'Press DOWN while airborne',        cost: 3, color: '#7ee8fa' },
-      { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 2, color: '#e94560' },
+      { key: 'tripleJump',    name: 'TRIPLE JUMP',    desc: '3 jumps instead of 2',            cost: 8, color: '#a8dadc' },
+      { key: 'extraHeart',    name: 'EXTRA HEART',    desc: 'Start with 4 lives',              cost: 7, color: '#ff6b8a' },
+      { key: 'longSlide',     name: 'LONG SLIDE',     desc: 'Longer slide, cancel by jumping',  cost: 7, color: '#f5a623' },
+      { key: 'coinMagnet',    name: 'COIN MAGNET',    desc: 'Pull nearby coins toward you',     cost: 8, color: '#ffe066' },
+      { key: 'diamondMagnet', name: 'GEM MAGNET',     desc: 'Pull nearby diamonds toward you',  cost: 7, color: '#40c9a2' },
+      { key: 'dive',           name: 'DIVE',            desc: 'Press DOWN while airborne',        cost: 8, color: '#7ee8fa' },
+      { key: 'trail',         name: 'TRAIL EFFECT',   desc: 'Colorful particle trail',          cost: 7, color: '#e94560' },
       { key: 'default',       name: 'DEFAULT SKIN',   desc: 'The original look',                cost: 0, color: '#a8dadc', type: 'skin' },
-      { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 2, color: '#ff6b35', type: 'skin' },
-      { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 2, color: '#39ff14', type: 'skin' },
-      { key: 'ghost',         name: 'GHOST SKIN',     desc: 'Transparent phantom, floats',      cost: 3, color: '#b8c6db', type: 'skin' },
-      { key: 'robot',         name: 'ROBOT SKIN',     desc: 'Antenna, bolts & mech legs',       cost: 3, color: '#8a8a8a', type: 'skin' },
-      { key: 'ninja',         name: 'NINJA SKIN',     desc: 'Slit visor & trailing scarf',      cost: 4, color: '#cc0000', type: 'skin' },
-      { key: 'frost',         name: 'FROST SKIN',     desc: 'Ice spikes & sparkle aura',        cost: 4, color: '#b0e0ff', type: 'skin' },
-      { key: 'royal',         name: 'ROYAL SKIN',     desc: 'Crown & flowing cape',             cost: 5, color: '#ffd700', type: 'skin' },
+      { key: 'fire',          name: 'FIRE SKIN',      desc: 'Red & orange look',                cost: 7, color: '#ff6b35', type: 'skin' },
+      { key: 'neon',          name: 'NEON SKIN',      desc: 'Green & pink neon look',           cost: 7, color: '#39ff14', type: 'skin' },
+      { key: 'ghost',         name: 'GHOST SKIN',     desc: 'Transparent phantom, floats',      cost: 8, color: '#b8c6db', type: 'skin' },
+      { key: 'robot',         name: 'ROBOT SKIN',     desc: 'Antenna, bolts & mech legs',       cost: 8, color: '#8a8a8a', type: 'skin' },
+      { key: 'ninja',         name: 'NINJA SKIN',     desc: 'Slit visor & trailing scarf',      cost: 9, color: '#cc0000', type: 'skin' },
+      { key: 'frost',         name: 'FROST SKIN',     desc: 'Ice spikes & sparkle aura',        cost: 9, color: '#b0e0ff', type: 'skin' },
+      { key: 'royal',         name: 'ROYAL SKIN',     desc: 'Crown & flowing cape',             cost: 10, color: '#ffd700', type: 'skin' },
+      { key: 'galaxy',        name: 'GALAXY SKIN',    desc: 'Cosmic purple with star aura',     cost: 50, color: '#6a4ac0', type: 'skin' },
+      { key: 'dragon',        name: 'DRAGON SKIN',    desc: 'Emerald scales & crimson cape',    cost: 50, color: '#40c060', type: 'skin' },
+      { key: 'rainbow',       name: 'RAINBOW SKIN',   desc: 'Color-shifting hue cycle',         cost: 50, color: '#ff0080', type: 'skin' },
+      { key: 'dinosaur',      name: 'DINOSAUR SKIN',  desc: 'Spikes, tail & toothy grin',       cost: 100, color: '#3a8a3a', type: 'skin' },
+      { key: 'phoenix',       name: 'PHOENIX SKIN',   desc: 'Burning wings & flame trail',      cost: 100, color: '#e84a0e', type: 'skin' },
+      { key: 'alien',         name: 'ALIEN SKIN',     desc: 'Antennae, helm & cosmic glow',     cost: 100, color: '#7a40c0', type: 'skin' },
     ];
 
     function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
@@ -531,6 +555,10 @@
       levelDiamondsSpawned = 0;
       spinTokens = [];
       nextSpinTokenAt = 2500 + Math.floor(Math.random() * 2500);
+      diamondBags = [];
+      nextDiamondBagAt = 8000 + Math.floor(Math.random() * 6000);
+      platforms = [];
+      nextPlatformAt = 800 + Math.floor(Math.random() * 1200);
       particles = [];
       lives = upgrades.extraHeart ? 4 : 3;
       invincible = 0;
@@ -659,6 +687,8 @@
       coins = [];
       diamonds = [];
       spinTokens = [];
+      diamondBags = [];
+      platforms = [];
       level = LEVEL_THEMES.length + 1;
       player.x = 100;
       initBoss();
@@ -708,7 +738,7 @@
         if (e.code === 'ArrowUp') shopSelection = (shopSelection + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
         if (e.code === 'ArrowDown') shopSelection = (shopSelection + 1) % SHOP_ITEMS.length;
         if (e.code === 'Space' || e.code === 'Enter') shopPurchase();
-        if (e.code === 'KeyS') state = shopReturnState;
+        if (e.code === 'KeyS' || e.code === 'Escape') state = shopReturnState;
         return;
       }
       if (e.code === 'ArrowUp')    { e.preventDefault(); jump(); }
@@ -1079,6 +1109,46 @@
         roundRect(-sw / 2, -sh, sw, sh - 4, skin.robot ? 2 : 5);
         ctx.fill();
 
+        // Rainbow: clipped vertical bands on sliding body
+        if (skin.rainbow) {
+          ctx.save();
+          ctx.beginPath();
+          roundRect(-sw / 2, -sh, sw, sh - 4, 5);
+          ctx.clip();
+          const rcolors = ['#ff2244', '#ff8800', '#ffdd00', '#22cc44', '#0088ff', '#5533cc', '#aa00cc'];
+          const stripeW = sw / rcolors.length;
+          const offset = (frame * 0.6) % stripeW;
+          for (let i = -1; i < rcolors.length + 1; i++) {
+            const idx = ((i % rcolors.length) + rcolors.length) % rcolors.length;
+            ctx.fillStyle = rcolors[idx];
+            ctx.fillRect(-sw / 2 + i * stripeW + offset, -sh, stripeW + 1, sh - 4);
+          }
+          ctx.restore();
+        }
+
+        // Dragon: scales on sliding body
+        if (skin.dragon) {
+          ctx.fillStyle = 'rgba(0, 40, 20, 0.55)';
+          for (let xx = -sw / 2 + 4; xx < sw / 2 - 8; xx += 5) {
+            ctx.beginPath();
+            ctx.arc(xx, -sh + 5, 2.2, Math.PI, 0);
+            ctx.fill();
+          }
+        }
+
+        // Galaxy: stars on sliding body
+        if (skin.galaxy) {
+          for (let i = 0; i < 5; i++) {
+            const sx = -sw / 2 + 4 + i * (sw - 16) / 4;
+            const sy = -sh / 2 - 2;
+            const tw = 0.4 + Math.abs(Math.sin(frame * 0.08 + i)) * 0.6;
+            ctx.globalAlpha = tw;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(sx, sy, 1.2, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+        }
+
         // Frost: small spikes on sliding body
         if (skin.frost) {
           ctx.fillStyle = '#d0f0ff';
@@ -1171,6 +1241,117 @@
           }
         }
 
+        // Dinosaur: thick tail trailing behind body
+        if (skin.dinosaur) {
+          const tailWave = Math.sin(frame * 0.14) * 5;
+          ctx.fillStyle = skin.body;
+          ctx.strokeStyle = '#1a4a1a';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 2, -14);
+          ctx.quadraticCurveTo(-pw / 2 - 10 + tailWave * 0.4, -6, -pw / 2 - 22 + tailWave, -2 + tailWave * 0.3);
+          ctx.lineTo(-pw / 2 - 16 + tailWave, 4 + tailWave * 0.3);
+          ctx.quadraticCurveTo(-pw / 2 - 4 + tailWave * 0.2, 0, -pw / 2 + 2, -6);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+        }
+
+        // Phoenix: fiery wings (behind body)
+        if (skin.phoenix) {
+          const flap = Math.sin(frame * 0.22) * 0.4;
+          for (let side = -1; side <= 1; side += 2) {
+            ctx.save();
+            ctx.translate(side * (pw / 2 - 2), -ph + 14);
+            ctx.rotate(side * (0.5 - flap));
+            // Outer flame
+            ctx.fillStyle = '#ff6010';
+            ctx.shadowColor = '#ffa040'; ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(side * 22, -10);
+            ctx.lineTo(side * 26, 0);
+            ctx.lineTo(side * 22, 8);
+            ctx.lineTo(side * 14, 12);
+            ctx.lineTo(side * 8, 10);
+            ctx.closePath(); ctx.fill();
+            // Inner flame
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#ffd040';
+            ctx.beginPath();
+            ctx.moveTo(0, 2);
+            ctx.lineTo(side * 14, -4);
+            ctx.lineTo(side * 18, 3);
+            ctx.lineTo(side * 12, 8);
+            ctx.lineTo(side * 6, 7);
+            ctx.closePath(); ctx.fill();
+            ctx.restore();
+          }
+        }
+
+        // Dragon wings (behind body)
+        if (skin.dragon) {
+          const flap = Math.sin(frame * 0.18) * 0.35;
+          // Left wing
+          ctx.save();
+          ctx.translate(-pw / 2 + 2, -ph + 14);
+          ctx.rotate(-0.5 + flap);
+          ctx.fillStyle = '#8b0a2a';
+          ctx.strokeStyle = '#3a0010';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(-20, -8);
+          ctx.lineTo(-24, 2);
+          ctx.lineTo(-18, 4);
+          ctx.lineTo(-22, 12);
+          ctx.lineTo(-12, 8);
+          ctx.lineTo(-6, 14);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Wing bones
+          ctx.strokeStyle = '#5a0418';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-20, -8); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-18, 4); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-12, 8); ctx.stroke();
+          ctx.restore();
+          // Right wing
+          ctx.save();
+          ctx.translate(pw / 2 - 2, -ph + 14);
+          ctx.rotate(0.5 - flap);
+          ctx.fillStyle = '#8b0a2a';
+          ctx.strokeStyle = '#3a0010';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(20, -8);
+          ctx.lineTo(24, 2);
+          ctx.lineTo(18, 4);
+          ctx.lineTo(22, 12);
+          ctx.lineTo(12, 8);
+          ctx.lineTo(6, 14);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          ctx.strokeStyle = '#5a0418';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(20, -8); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(18, 4); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(12, 8); ctx.stroke();
+          ctx.restore();
+          // Dragon tail
+          const tailWave = Math.sin(frame * 0.12) * 4;
+          ctx.fillStyle = skin.body;
+          ctx.strokeStyle = '#0a2010';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 4, -10);
+          ctx.quadraticCurveTo(-pw / 2 - 8 + tailWave * 0.5, -4, -pw / 2 - 14 + tailWave, 2 + tailWave * 0.4);
+          ctx.lineTo(-pw / 2 - 10 + tailWave, 4 + tailWave * 0.4);
+          ctx.quadraticCurveTo(-pw / 2 - 4 + tailWave * 0.3, -2, -pw / 2 + 4, -6);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+        }
+
         // Royal cape (behind body)
         if (skin.royal) {
           const capeWave = Math.sin(frame * 0.1 + player.legPhase * 0.3) * 4;
@@ -1197,6 +1378,117 @@
         ctx.fillStyle = skin.body;
         roundRect(-pw / 2, -ph, pw, ph - 12, skin.robot ? 2 : 6);
         ctx.fill();
+
+        // Rainbow: horizontal color bands clipped to body shape
+        if (skin.rainbow) {
+          ctx.save();
+          ctx.beginPath();
+          roundRect(-pw / 2, -ph, pw, ph - 12, 6);
+          ctx.clip();
+          const rcolors = ['#ff2244', '#ff8800', '#ffdd00', '#22cc44', '#0088ff', '#5533cc', '#aa00cc'];
+          const bodyH = ph - 12;
+          const stripeH = bodyH / rcolors.length;
+          const offset = (frame * 0.6) % stripeH;
+          for (let i = -1; i < rcolors.length + 1; i++) {
+            const idx = ((i % rcolors.length) + rcolors.length) % rcolors.length;
+            ctx.fillStyle = rcolors[idx];
+            ctx.fillRect(-pw / 2, -ph + i * stripeH + offset, pw, stripeH + 1);
+          }
+          ctx.restore();
+        }
+
+        // Dragon: scales overlay
+        if (skin.dragon) {
+          ctx.fillStyle = 'rgba(0, 40, 20, 0.55)';
+          for (let yy = -ph + 22; yy < -16; yy += 4) {
+            const rowOdd = Math.floor((yy + ph) / 4) % 2;
+            for (let xx = -pw / 2 + 3; xx < pw / 2 - 1; xx += 5) {
+              ctx.beginPath();
+              ctx.arc(xx + (rowOdd ? 2.5 : 0), yy, 2.2, Math.PI, 0);
+              ctx.fill();
+            }
+          }
+        }
+
+        // Dinosaur: spike plates along the top of the back (stegosaurus-style)
+        if (skin.dinosaur) {
+          ctx.fillStyle = '#5fbf5f';
+          ctx.strokeStyle = '#1a4a1a';
+          ctx.lineWidth = 1;
+          // 5 triangular plates along the back, decreasing toward the tail (left)
+          const plateXs = [-pw / 2 + 4, -pw / 4, 0, pw / 4, pw / 2 - 4];
+          const plateHeights = [5, 7, 8, 7, 5];
+          for (let i = 0; i < plateXs.length; i++) {
+            const px2 = plateXs[i];
+            const peakH = plateHeights[i];
+            ctx.beginPath();
+            ctx.moveTo(px2 - 4, -ph + 2);
+            ctx.lineTo(px2, -ph - peakH);
+            ctx.lineTo(px2 + 4, -ph + 2);
+            ctx.closePath();
+            ctx.fill(); ctx.stroke();
+          }
+          // Belly (light underside)
+          ctx.fillStyle = 'rgba(220, 240, 180, 0.3)';
+          roundRect(-pw / 2 + 3, -ph + 24, pw - 8, ph - 38, 4);
+          ctx.fill();
+        }
+
+        // Alien: cosmic helmet bubble + body glow
+        if (skin.alien) {
+          // Body glow
+          ctx.shadowColor = '#b080ff';
+          ctx.shadowBlur = 12 + Math.sin(frame * 0.08) * 4;
+          ctx.fillStyle = 'rgba(176,128,255,0.10)';
+          roundRect(-pw / 2 - 2, -ph - 2, pw + 4, ph - 8, 8);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          // Helmet bubble over head area
+          ctx.fillStyle = 'rgba(160, 255, 200, 0.18)';
+          ctx.strokeStyle = 'rgba(160, 255, 200, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, -ph + 12, pw / 2 + 3, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+          // Highlight on helmet
+          ctx.fillStyle = 'rgba(255,255,255,0.4)';
+          ctx.beginPath();
+          ctx.ellipse(-5, -ph + 8, 4, 2, -0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Galaxy: twinkling stars on body + cosmic aura
+        if (skin.galaxy) {
+          ctx.shadowColor = '#a080ff';
+          ctx.shadowBlur = 14 + Math.sin(frame * 0.06) * 4;
+          ctx.fillStyle = 'rgba(160,128,255,0.10)';
+          roundRect(-pw / 2 - 2, -ph - 2, pw + 4, ph - 8, 8);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          const starPositions = [
+            [-6, -ph + 8], [4, -ph + 14], [-2, -ph + 22], [7, -ph + 26],
+            [-7, -ph + 30], [2, -ph + 36], [-4, -16], [6, -20],
+          ];
+          for (let i = 0; i < starPositions.length; i++) {
+            const [sx, sy] = starPositions[i];
+            const tw = 0.4 + Math.abs(Math.sin(frame * 0.08 + i * 1.3)) * 0.6;
+            ctx.globalAlpha = tw;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(sx, sy, 1.2, 0, Math.PI * 2);
+            ctx.fill();
+            // 4-point twinkle cross
+            if (tw > 0.7) {
+              ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+              ctx.lineWidth = 0.6;
+              ctx.beginPath();
+              ctx.moveTo(sx - 2.5, sy); ctx.lineTo(sx + 2.5, sy);
+              ctx.moveTo(sx, sy - 2.5); ctx.lineTo(sx, sy + 2.5);
+              ctx.stroke();
+            }
+          }
+          ctx.globalAlpha = 1;
+        }
 
         // Ghost: ethereal glow around body
         if (skin.ghost) {
@@ -1310,6 +1602,118 @@
           ctx.shadowBlur = 0;
         }
 
+        // Dinosaur: toothy grin under the visor
+        if (skin.dinosaur) {
+          ctx.fillStyle = '#1a3a1a';
+          roundRect(-pw / 2 + 5, -ph + 21, pw - 10, 5, 1);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          const toothCount = 5;
+          const tw = (pw - 12) / toothCount;
+          for (let i = 0; i < toothCount; i++) {
+            const tx = -pw / 2 + 6 + i * tw + tw / 2;
+            ctx.beginPath();
+            ctx.moveTo(tx - tw * 0.35, -ph + 21);
+            ctx.lineTo(tx, -ph + 26);
+            ctx.lineTo(tx + tw * 0.35, -ph + 21);
+            ctx.closePath();
+            ctx.fill();
+          }
+          // Yellow snake-eye visor accent (over standard visor)
+          ctx.fillStyle = '#1a1a1a';
+          ctx.beginPath();
+          ctx.ellipse(-3, -ph + 13, 1.5, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(5, -ph + 13, 1.5, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Phoenix: flaming feather crest on head
+        if (skin.phoenix) {
+          const flick = Math.sin(frame * 0.15) * 2;
+          ctx.fillStyle = '#ff8020';
+          ctx.shadowColor = '#ff6010'; ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.moveTo(-6, -ph + 2);
+          ctx.lineTo(-4 + flick, -ph - 6);
+          ctx.lineTo(0, -ph - 2);
+          ctx.lineTo(4 - flick, -ph - 8);
+          ctx.lineTo(6, -ph + 2);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = '#ffe080';
+          ctx.shadowBlur = 0;
+          ctx.beginPath();
+          ctx.moveTo(-3, -ph);
+          ctx.lineTo(0, -ph - 4 + flick * 0.5);
+          ctx.lineTo(3, -ph);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Alien: two wobbly antennae with glowing bulbs
+        if (skin.alien) {
+          const wob1 = Math.sin(frame * 0.1) * 1.5;
+          const wob2 = Math.sin(frame * 0.13 + 1) * 1.5;
+          ctx.strokeStyle = '#7a40c0';
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(-5, -ph + 4);
+          ctx.quadraticCurveTo(-7 + wob1, -ph - 4, -8 + wob1, -ph - 9);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(5, -ph + 4);
+          ctx.quadraticCurveTo(7 + wob2, -ph - 4, 8 + wob2, -ph - 9);
+          ctx.stroke();
+          // Bulbs
+          ctx.fillStyle = '#a0ffcc';
+          ctx.shadowColor = '#a0ffcc'; ctx.shadowBlur = 8;
+          ctx.beginPath(); ctx.arc(-8 + wob1, -ph - 10, 2.2, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(8 + wob2, -ph - 10, 2.2, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+
+        // Dragon: horns on head
+        if (skin.dragon) {
+          ctx.fillStyle = '#3a1a08';
+          ctx.strokeStyle = '#1a0a02';
+          ctx.lineWidth = 1;
+          // Left horn (curved back)
+          ctx.beginPath();
+          ctx.moveTo(-7, -ph + 2);
+          ctx.quadraticCurveTo(-11, -ph - 4, -9, -ph - 10);
+          ctx.lineTo(-3, -ph - 1);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Right horn
+          ctx.beginPath();
+          ctx.moveTo(7, -ph + 2);
+          ctx.quadraticCurveTo(11, -ph - 4, 9, -ph - 10);
+          ctx.lineTo(3, -ph - 1);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Horn highlights
+          ctx.fillStyle = 'rgba(255,200,120,0.4)';
+          ctx.beginPath(); ctx.arc(-9, -ph - 4, 1, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(9, -ph - 4, 1, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Galaxy: orbiting moons/planets
+        if (skin.galaxy) {
+          const orbA = frame * 0.04;
+          for (let i = 0; i < 2; i++) {
+            const a = orbA + i * Math.PI;
+            const ox = Math.cos(a) * 14;
+            const oy = -ph + 4 + Math.sin(a) * 4;
+            ctx.fillStyle = i === 0 ? '#ffd080' : '#a0c0ff';
+            ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 5;
+            ctx.beginPath(); ctx.arc(ox, oy, 1.6, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+          }
+        }
+
         // Royal: crown
         if (skin.royal) {
           ctx.fillStyle = skin.crownColor;
@@ -1361,6 +1765,41 @@
       ctx.restore();
     }
 
+    function drawPlatform(p) {
+      // Shadow on ground beneath the platform
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(p.x + p.w / 2, FLOOR - 1, p.w * 0.45, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Main body
+      ctx.fillStyle = '#2e8b3e';
+      roundRect(p.x, p.y, p.w, p.h, 4);
+      ctx.fill();
+
+      // Brighter top edge (grass strip)
+      ctx.fillStyle = '#5bd667';
+      roundRect(p.x, p.y, p.w, 4, 4);
+      ctx.fill();
+
+      // Darker bottom shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(p.x + 2, p.y + p.h - 3, p.w - 4, 3);
+
+      // Outline
+      ctx.strokeStyle = '#1a5a25';
+      ctx.lineWidth = 1.5;
+      roundRect(p.x, p.y, p.w, p.h, 4);
+      ctx.stroke();
+
+      // Soft green glow
+      ctx.shadowColor = '#40c060';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = 'rgba(91,214,103,0.0)';
+      ctx.beginPath(); ctx.rect(p.x, p.y, p.w, p.h); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
     function drawObstacle(ob) {
       const top = ob.y - ob.h;
       const bot = ob.y;
@@ -1399,6 +1838,125 @@
         ctx.shadowColor = '#e74c3c'; ctx.shadowBlur = 10;
         ctx.fillStyle = 'rgba(231,76,60,0.35)';
         roundRect(ob.x, bot - beamH, ob.w, beamH, 3); ctx.fill();
+        ctx.shadowBlur = 0;
+
+      } else if (ob.type === 'mine') {
+        // Spiky metal landmine on the ground
+        const cx = ob.x + ob.w / 2, cy = bot - ob.h / 2;
+        const rr = ob.h / 2;
+        // Spikes
+        ctx.fillStyle = '#444';
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+          ctx.lineTo(cx + Math.cos(a) * (rr + 6), cy + Math.sin(a) * (rr + 6));
+          ctx.lineTo(cx + Math.cos(a + 0.2) * rr, cy + Math.sin(a + 0.2) * rr);
+          ctx.closePath();
+          ctx.fill();
+        }
+        // Body
+        ctx.fillStyle = '#2a2a2a';
+        ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
+        // Blinking red light
+        const blink = (frame % 24) < 12;
+        ctx.fillStyle = blink ? '#ff2020' : '#661010';
+        ctx.shadowColor = blink ? '#ff2020' : 'transparent';
+        ctx.shadowBlur = blink ? 8 : 0;
+        ctx.beginPath(); ctx.arc(cx, cy - 1, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+      } else if (ob.type === 'crystal') {
+        // Purple/cyan crystal cluster — sharp angular shards
+        ctx.shadowColor = '#a040ff'; ctx.shadowBlur = 12;
+        ctx.fillStyle = '#9a30e0';
+        ctx.strokeStyle = '#4a0080';
+        ctx.lineWidth = 1.5;
+        // Main shard
+        ctx.beginPath();
+        ctx.moveTo(ob.x + ob.w / 2, top);
+        ctx.lineTo(ob.x + ob.w * 0.85, top + ob.h * 0.4);
+        ctx.lineTo(ob.x + ob.w * 0.7, bot);
+        ctx.lineTo(ob.x + ob.w * 0.3, bot);
+        ctx.lineTo(ob.x + ob.w * 0.15, top + ob.h * 0.4);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        // Side shards
+        ctx.fillStyle = '#c060ff';
+        ctx.beginPath();
+        ctx.moveTo(ob.x + ob.w * 0.15, top + ob.h * 0.4);
+        ctx.lineTo(ob.x, top + ob.h * 0.7);
+        ctx.lineTo(ob.x + ob.w * 0.2, bot);
+        ctx.lineTo(ob.x + ob.w * 0.3, bot);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        // Highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(ob.x + ob.w * 0.5, top + 3);
+        ctx.lineTo(ob.x + ob.w * 0.6, top + ob.h * 0.3);
+        ctx.lineTo(ob.x + ob.w * 0.45, top + ob.h * 0.6);
+        ctx.closePath();
+        ctx.fill();
+
+      } else if (ob.type === 'floater') {
+        // Floating red/orange energy block in mid-air (must duck or jump-over)
+        const cx = ob.x + ob.w / 2;
+        const fy = top + Math.sin(frame * 0.08 + ob.x * 0.01) * 3;
+        // Glow halo
+        ctx.shadowColor = '#ff4040'; ctx.shadowBlur = 14;
+        ctx.fillStyle = '#cc2020';
+        roundRect(ob.x, fy, ob.w, ob.h, 4);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        // Inner pattern
+        ctx.fillStyle = '#ff5050';
+        roundRect(ob.x + 3, fy + 3, ob.w - 6, ob.h - 6, 3);
+        ctx.fill();
+        // Pulsing core
+        const pulse = 0.5 + Math.sin(frame * 0.15) * 0.5;
+        ctx.fillStyle = 'rgba(255,220,180,' + (0.4 + pulse * 0.5) + ')';
+        ctx.beginPath();
+        ctx.arc(cx, fy + ob.h / 2, ob.h * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // Outline
+        ctx.strokeStyle = '#660808'; ctx.lineWidth = 1.5;
+        roundRect(ob.x, fy, ob.w, ob.h, 4);
+        ctx.stroke();
+        // Update hitbox bobbing so collision matches visual
+        ob._renderOffset = fy - top;
+
+      } else if (ob.type === 'electric') {
+        // Vertical electric barrier — thin, full-height, with crackling bolts
+        ctx.fillStyle = '#1a1a3a';
+        roundRect(ob.x, top, ob.w, ob.h, 2);
+        ctx.fill();
+        // Crackling lightning down the middle
+        ctx.strokeStyle = '#ffff60';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#ffff60'; ctx.shadowBlur = 10;
+        ctx.beginPath();
+        const cx = ob.x + ob.w / 2;
+        ctx.moveTo(cx, top);
+        for (let yy = top + 6; yy < bot; yy += 8) {
+          const off = (Math.sin(frame * 0.4 + yy * 0.3) + Math.sin(frame * 0.7 + yy)) * 3;
+          ctx.lineTo(cx + off, yy);
+        }
+        ctx.lineTo(cx, bot);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        // Arc spark dots
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < 3; i++) {
+          const sy = top + (frame * 4 + i * 30) % ob.h;
+          ctx.beginPath(); ctx.arc(cx + Math.sin(frame * 0.5 + i) * 4, sy, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+        // Edge glow
+        ctx.shadowColor = '#ffff60'; ctx.shadowBlur = 8;
+        ctx.fillStyle = 'rgba(255,255,96,0.25)';
+        roundRect(ob.x, top, ob.w, ob.h, 2);
+        ctx.fill();
         ctx.shadowBlur = 0;
 
       } else if (ob.type === 'lowwall') {
@@ -1621,6 +2179,94 @@
       ctx.restore();
     }
 
+    function drawDiamondBag(b) {
+      const bob = Math.sin(frame * 0.05 + b.phase) * 4;
+      const cx = b.x, cy = b.y + bob;
+      const r = b.r;
+      const pulse = 0.7 + Math.sin(frame * 0.08 + b.phase) * 0.3;
+
+      ctx.save();
+
+      // Ground shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(cx, GROUND - 2, r * 0.9, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Sack body
+      ctx.shadowColor = '#7ee8fa';
+      ctx.shadowBlur = 14 * pulse;
+      ctx.fillStyle = '#8b5a2b';
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.4, cy - r * 0.7);
+      ctx.quadraticCurveTo(cx - r * 1.15, cy - r * 0.15, cx - r * 0.95, cy + r * 0.65);
+      ctx.quadraticCurveTo(cx, cy + r * 1.1, cx + r * 0.95, cy + r * 0.65);
+      ctx.quadraticCurveTo(cx + r * 1.15, cy - r * 0.15, cx + r * 0.4, cy - r * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Right-side shading
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(cx + r * 0.4, cy - r * 0.7);
+      ctx.quadraticCurveTo(cx + r * 1.15, cy - r * 0.15, cx + r * 0.95, cy + r * 0.65);
+      ctx.quadraticCurveTo(cx + r * 0.55, cy + r * 0.95, cx + r * 0.2, cy + r * 0.95);
+      ctx.lineTo(cx + r * 0.2, cy - r * 0.7);
+      ctx.closePath();
+      ctx.fill();
+
+      // Rope tie
+      ctx.strokeStyle = '#4a2e12'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.45, cy - r * 0.6);
+      ctx.lineTo(cx + r * 0.45, cy - r * 0.6);
+      ctx.stroke();
+
+      // Diamonds spilling out of the top
+      const gems = [
+        { dx: -r * 0.45, dy: -r * 1.0, s: r * 0.22 },
+        { dx:  0,         dy: -r * 1.25, s: r * 0.28 },
+        { dx:  r * 0.45,  dy: -r * 1.0, s: r * 0.22 },
+        { dx: -r * 0.15,  dy: -r * 0.85, s: r * 0.18 },
+        { dx:  r * 0.25,  dy: -r * 0.8,  s: r * 0.18 },
+      ];
+      for (const g of gems) {
+        const gx = cx + g.dx, gy = cy + g.dy;
+        ctx.fillStyle = '#7ee8fa';
+        ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.moveTo(gx, gy - g.s);
+        ctx.lineTo(gx + g.s * 0.7, gy);
+        ctx.lineTo(gx, gy + g.s);
+        ctx.lineTo(gx - g.s * 0.7, gy);
+        ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.beginPath();
+        ctx.moveTo(gx, gy - g.s);
+        ctx.lineTo(gx + g.s * 0.35, gy - g.s * 0.3);
+        ctx.lineTo(gx, gy - g.s * 0.1);
+        ctx.lineTo(gx - g.s * 0.35, gy - g.s * 0.3);
+        ctx.closePath(); ctx.fill();
+      }
+
+      // Sparkles
+      for (let i = 0; i < 4; i++) {
+        const a = (frame * 0.05) + (i / 4) * Math.PI * 2 + b.phase;
+        const rr = r * 1.3 + Math.sin(frame * 0.07 + i) * 2;
+        const sx = cx + Math.cos(a) * rr;
+        const sy = cy + Math.sin(a) * rr * 0.6;
+        const sp = 0.3 + Math.sin(frame * 0.09 + i * 1.3) * 0.5;
+        ctx.globalAlpha = Math.max(0, sp);
+        ctx.fillStyle = '#7ee8fa';
+        ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 6;
+        ctx.beginPath(); ctx.arc(sx, sy, 1.5, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
     function drawSpinToken(s) {
       const bob = Math.sin(frame * 0.05 + s.phase) * 4;
       const cy = s.y + bob;
@@ -1738,7 +2384,11 @@
         return;
       }
 
-      if (state !== 'running' && state !== 'boss') return;
+      if (state !== 'running' && state !== 'boss') {
+        // Keep visual effects (shake fade-out) alive even after death/victory
+        if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
+        return;
+      }
 
       frame++;
       if (!(state === 'boss' && boss && boss.defeated)) score++;
@@ -1750,6 +2400,7 @@
 
       // Invincibility countdown
       if (invincible > 0) invincible--;
+      if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
 
       // Slide timer
       if (player.sliding) {
@@ -1759,21 +2410,46 @@
 
       // Player physics (no gravity/jump while sliding on ground)
       if (!player.sliding) {
+        const prevFoot = player.y + player.h;
         player.vy += 0.6;
         player.y += player.vy;
-        const groundY = GROUND;
-        if (player.y >= groundY) {
-          player.y = groundY;
-          player.vy = 0;
-          player.onGround = true;
-          player.jumpsLeft = upgrades.tripleJump ? 3 : 2;
-          // Dive landing impact
-          if (player.diving) {
-            player.diving = false;
-            spawnParticles(player.x + player.w / 2, FLOOR, getSkin().ground, 10);
+        const foot = player.y + player.h;
+        let landedOnPlatform = false;
+
+        // Platform landing (only when falling)
+        if (player.vy >= 0) {
+          for (const p of platforms) {
+            const overlapX = player.x + player.w > p.x + 2 && player.x < p.x + p.w - 2;
+            if (overlapX && prevFoot <= p.y + 1 && foot >= p.y) {
+              player.y = p.y - player.h;
+              player.vy = 0;
+              player.onGround = true;
+              player.jumpsLeft = upgrades.tripleJump ? 3 : 2;
+              if (player.diving) {
+                player.diving = false;
+                spawnParticles(player.x + player.w / 2, p.y, '#40c060', 10);
+              }
+              landedOnPlatform = true;
+              break;
+            }
           }
-        } else {
-          player.onGround = false;
+        }
+
+        if (!landedOnPlatform) {
+          const groundY = GROUND;
+          if (player.y >= groundY) {
+            player.y = groundY;
+            player.vy = 0;
+            player.onGround = true;
+            player.jumpsLeft = upgrades.tripleJump ? 3 : 2;
+            // Dive landing impact
+            if (player.diving) {
+              player.diving = false;
+              spawnParticles(player.x + player.w / 2, FLOOR, getSkin().ground, 10);
+            }
+          } else {
+            player.onGround = false;
+          }
         }
       }
 
@@ -1853,26 +2529,44 @@
         boss.attackCooldown--;
         if (boss.attackCooldown <= 0) {
           boss.phase++;
-          const pattern = boss.phase % 5;
-          if (pattern === 0) {
-            // Ground obstacle
-            obstacles.push({ x: boss.x, y: FLOOR, w: 28, h: 30, type: 'ground' });
-          } else if (pattern === 1) {
-            // Overhead beam
-            obstacles.push({ x: boss.x, y: SLIDE_CLEAR, w: 72, h: 52, type: 'overhead' });
-          } else if (pattern === 2) {
-            // Tall + overhead combo
-            obstacles.push({ x: boss.x, y: FLOOR, w: 20, h: 54, type: 'ground' });
-            obstacles.push({ x: boss.x + 80, y: SLIDE_CLEAR, w: 60, h: 52, type: 'overhead' });
-          } else if (pattern === 3) {
-            // Pair
-            obstacles.push({ x: boss.x, y: FLOOR, w: 52, h: 42, type: 'ground', pair: true });
+          // Random attack from solo + safe-combo pool — single-action patterns,
+          // generous spacing so a slide-or-jump path is always available.
+          const r = Math.floor(Math.random() * 11);
+          const bx = boss.x;
+          if (r === 0) {
+            obstacles.push({ x: bx, y: FLOOR, w: 28, h: 30, type: 'ground' });
+          } else if (r === 1) {
+            obstacles.push({ x: bx, y: SLIDE_CLEAR, w: 72, h: 52, type: 'overhead' });
+          } else if (r === 2) {
+            // Tall ground + overhead — well spaced so jump-then-slide is possible
+            obstacles.push({ x: bx, y: FLOOR, w: 20, h: 54, type: 'ground' });
+            obstacles.push({ x: bx + 130, y: SLIDE_CLEAR, w: 60, h: 52, type: 'overhead' });
+          } else if (r === 3) {
+            obstacles.push({ x: bx, y: FLOOR, w: 52, h: 42, type: 'ground', pair: true });
+          } else if (r === 4) {
+            obstacles.push({ x: bx, y: SLIDE_CLEAR, w: 34, h: SLIDE_CLEAR, type: 'lowwall' });
+          } else if (r === 5) {
+            // Double ground spikes with generous jump-gap between
+            obstacles.push({ x: bx,       y: FLOOR, w: 22, h: 32, type: 'ground' });
+            obstacles.push({ x: bx + 110, y: FLOOR, w: 22, h: 32, type: 'ground' });
+          } else if (r === 6) {
+            // Two mines spread out (jumpable each)
+            obstacles.push({ x: bx,       y: FLOOR, w: 26, h: 22, type: 'mine' });
+            obstacles.push({ x: bx + 110, y: FLOOR, w: 26, h: 22, type: 'mine' });
+          } else if (r === 7) {
+            obstacles.push({ x: bx, y: FLOOR, w: 40, h: 46, type: 'crystal' });
+          } else if (r === 8) {
+            // Floater above ground spike — jump under floater, over spike
+            obstacles.push({ x: bx, y: FLOOR, w: 24, h: 26, type: 'ground' });
+            obstacles.push({ x: bx + 110, y: GROUND - 10, w: 44, h: 26, type: 'floater' });
+          } else if (r === 9) {
+            obstacles.push({ x: bx, y: SLIDE_CLEAR, w: 18, h: SLIDE_CLEAR, type: 'electric' });
           } else {
-            // Low wall
-            obstacles.push({ x: boss.x, y: SLIDE_CLEAR, w: 34, h: SLIDE_CLEAR, type: 'lowwall' });
+            // Single landmine
+            obstacles.push({ x: bx, y: FLOOR, w: 26, h: 22, type: 'mine' });
           }
-          // Boss flashes when attacking
-          boss.attackCooldown = Math.max(32, 58 - Math.floor((BOSS_MAX_HP - boss.hp) * 1.4));
+          // Boss flashes when attacking — faster cadence overall, even faster at low HP
+          boss.attackCooldown = Math.max(22, 50 - Math.floor((BOSS_MAX_HP - boss.hp) * 1.2));
         }
       }
 
@@ -1930,6 +2624,37 @@
         const obHitbox = { x: ob.x, y: ob.y - ob.h, w: ob.w, h: ob.h };
         const playerHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
         if (invincible <= 0 && collides(playerHitbox, obHitbox)) {
+          // Mines detonate on contact with a big explosion
+          if (ob.type === 'mine') {
+            const mx = ob.x + ob.w / 2, my = ob.y - ob.h / 2;
+            spawnParticles(mx, my, '#ffaa00', 30);
+            spawnParticles(mx, my, '#ff3020', 24);
+            spawnParticles(mx, my, '#ffffff', 14);
+            spawnParticles(mx, my, '#666666', 12);
+            spawnFloatText(mx, my - 14, 'BOOM', '#ffaa00');
+            obstacles.splice(i, 1);
+          }
+          // Screen shake on hit — heavier during boss fight, varies by obstacle type
+          if (state === 'boss') {
+            const mag = ob.type === 'mine'     ? 14 :
+                        ob.type === 'electric' ? 12 :
+                        ob.type === 'crystal'  ? 9  :
+                        ob.type === 'lowwall'  ? 10 :
+                        ob.type === 'floater'  ? 7  :
+                        ob.type === 'overhead' ? 8  : 7;
+            triggerShake(mag, 22);
+            // Type-specific flash particles around player
+            if (ob.type === 'electric') {
+              spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffff60', 24);
+              spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 12);
+            } else if (ob.type === 'crystal') {
+              spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#c060ff', 20);
+            } else if (ob.type === 'floater') {
+              spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ff5050', 18);
+            }
+          } else {
+            triggerShake(5, 10);
+          }
           lives--;
           spawnParticles(player.x + player.w / 2, player.y + player.h / 2, getSkin().body, 16);
           spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffffff', 8);
@@ -1937,7 +2662,7 @@
             state = 'dead';
             if (score > hiScore) hiScore = score;
           } else {
-            invincible = 120; // ~2 seconds of invincibility
+            invincible = state === 'boss' ? 60 : 120; // shorter during boss fight
             // Knock player back to ground and clear slide
             endSlide();
             player.vy = -6;  // small bounce on hit
@@ -2055,6 +2780,70 @@
           spawnParticles(s.x, sy, '#ffe066', 24);
           spawnParticles(s.x, sy, '#ffffff', 12);
           spawnFloatText(s.x, sy - 20, '+1 SPIN', '#ffe066');
+        }
+      }
+
+      // Rare diamond bag — grants 5 diamonds at once
+      if (state !== 'boss' && score >= nextDiamondBagAt) {
+        diamondBags.push({ x: W + 20, y: GROUND - 40 - Math.floor(Math.random() * 50), r: 18, phase: Math.random() * Math.PI * 2 });
+        nextDiamondBagAt = score + 10000 + Math.floor(Math.random() * 8000);
+      }
+
+      // Floating green platforms — land on top, walk underneath
+      if (state !== 'boss' && score >= nextPlatformAt) {
+        const pw = 70 + Math.floor(Math.random() * 50); // 70-120 wide
+        const py = GROUND - 30 - Math.floor(Math.random() * 60); // 30-90 above ground top
+        const platX = W + 20;
+        platforms.push({ x: platX, y: py, w: pw, h: 12 });
+        // Sometimes drop a reward on top of the platform
+        const roll = Math.random();
+        if (roll < 0.45) {
+          // Single diamond hovering above the platform
+          diamonds.push({ x: platX + pw / 2, y: py - 18, r: 16, phase: Math.random() * Math.PI * 2 });
+        } else if (roll < 0.55) {
+          // Rare diamond bag on top
+          diamondBags.push({ x: platX + pw / 2, y: py - 22, r: 18, phase: Math.random() * Math.PI * 2 });
+        } else if (roll < 0.75) {
+          // Row of 3 coins above the platform
+          for (let i = 0; i < 3; i++) {
+            coins.push({ x: platX + pw / 2 - 28 + i * 28, y: py - 16, r: 8, phase: i * 0.4 });
+          }
+        }
+        nextPlatformAt = score + 1200 + Math.floor(Math.random() * 1800);
+      }
+      for (let i = platforms.length - 1; i >= 0; i--) {
+        const p = platforms[i];
+        p.x -= speed;
+        if (p.x + p.w < 0) { platforms.splice(i, 1); continue; }
+      }
+
+      for (let i = diamondBags.length - 1; i >= 0; i--) {
+        const b = diamondBags[i];
+        b.x -= speed;
+        if (b.x + b.r < 0) { diamondBags.splice(i, 1); continue; }
+        // Diamond magnet pulls the bag too
+        if (upgrades.diamondMagnet) {
+          const px = player.x + player.w / 2, py = player.y + player.h / 2;
+          const dx = px - b.x, dy = py - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120 && dist > 0) {
+            const pull = (120 - dist) / 120 * 5;
+            b.x += (dx / dist) * pull;
+            b.y += (dy / dist) * pull;
+          }
+        }
+        const bob = Math.sin(frame * 0.05 + b.phase) * 4;
+        const by = b.y + bob;
+        if (b.x + b.r > player.x && b.x - b.r < player.x + player.w &&
+            by + b.r > player.y && by - b.r < player.y + player.h) {
+          diamondBags.splice(i, 1);
+          diamondCount += 5;
+          totalDiamonds += 5;
+          saveDiamonds();
+          score += 1000;
+          spawnParticles(b.x, by, '#7ee8fa', 30);
+          spawnParticles(b.x, by, '#ffffff', 18);
+          spawnFloatText(b.x, by - 24, '+◆ 5', '#7ee8fa');
         }
       }
 
@@ -2485,9 +3274,17 @@
     function draw() {
       const theme = getTheme();
 
-      // Sky
+      // Apply screen shake by translating the whole frame
+      ctx.save();
+      if (screenShake > 0) {
+        const fade = screenShake / 22;
+        const m = shakeMag * fade;
+        ctx.translate((Math.random() - 0.5) * m * 2, (Math.random() - 0.5) * m * 2);
+      }
+
+      // Sky (oversized to mask shake gaps at the edges)
       ctx.fillStyle = theme.sky;
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(-20, -20, W + 40, H + 40);
 
       // Stars
       for (const s of stars) {
@@ -2520,6 +3317,9 @@
       ctx.fillStyle = theme.gFill;
       ctx.fillRect(0, FLOOR + 2, W, H - FLOOR);
 
+      // Floating platforms (drawn behind obstacles so spikes/coins read clearly)
+      for (const p of platforms) drawPlatform(p);
+
       // Obstacles
       for (const ob of obstacles) drawObstacle(ob);
 
@@ -2531,6 +3331,7 @@
 
       // Diamonds
       for (const d of diamonds) drawDiamond(d);
+      for (const b of diamondBags) drawDiamondBag(b);
       for (const s of spinTokens) drawSpinToken(s);
 
       // Particles
@@ -3026,6 +3827,8 @@
         ctx.fillText(restartMsg, W / 2, H / 2 + 54);
         ctx.textAlign = 'left';
       }
+
+      ctx.restore(); // matches the save at the top of draw() for screen shake
     }
 
     // ---- Loop ----
