@@ -161,7 +161,7 @@
     };
 
     // ---- State ----
-    let state = 'start'; // 'start' | 'shop' | 'wheel' | 'running' | 'levelup' | 'boss' | 'victory' | 'dead'
+    let state = 'home'; // 'home' | 'start' | 'shop' | 'wheel' | 'running' | 'levelup' | 'boss' | 'victory' | 'dead' | 'snake' | 'snakeDead' | 'flappy' | 'flappyDead'
     let score = 0;
     let hiScore = 0;
     let speed = 0;
@@ -384,6 +384,31 @@
     function saveOwnedSkins() { localStorage.setItem('runner_ownedSkins', JSON.stringify(ownedSkins)); }
     function saveLastSpinDate() { localStorage.setItem('runner_lastSpinDate', lastSpinDate); }
     function saveExtraSpins() { localStorage.setItem('runner_extraSpins', extraSpins); }
+
+    // ---- Snake game state ----
+    const SNAKE_CELL = 20;
+    const SNAKE_COLS = 40; // 800 / 20
+    const SNAKE_ROWS = 13; // canvas top reserved for HUD area (24px) — 13*20 = 260, fits 300px
+    let snake = [];
+    let snakeDir = { x: 1, y: 0 };
+    let snakeDirQueue = []; // up to 2 queued direction changes (prevents 180° reversal from rapid taps)
+    let snakeFood = null;
+    let snakeScore = 0;
+    let snakeTick = 0;
+    let snakeTickRate = 8;
+    let snakeStarted = false;
+    let snakeHi = parseInt(localStorage.getItem('runner_snakeHi') || '0');
+    function saveSnakeHi() { localStorage.setItem('runner_snakeHi', snakeHi); }
+
+    // ---- Flappy bird state ----
+    let flappyBird = { x: 200, y: H / 2, vy: 0, w: 28, h: 22, rot: 0 };
+    let flappyPipes = [];
+    let flappyScore = 0;
+    let flappyStarted = false;
+    let flappyDeadTimer = 0;
+    let flappyNextPipe = 0;
+    let flappyHi = parseInt(localStorage.getItem('runner_flappyHi') || '0');
+    function saveFlappyHi() { localStorage.setItem('runner_flappyHi', flappyHi); }
 
     function todayKey() {
       const d = new Date();
@@ -698,6 +723,47 @@
 
     // ---- Input (keyboard) ----
     document.addEventListener('keydown', e => {
+      // Home menu
+      if (state === 'home') {
+        if (e.code === 'Digit1' || e.code === 'Numpad1') { e.preventDefault(); pickHomeCard(0); return; }
+        if (e.code === 'Digit2' || e.code === 'Numpad2') { e.preventDefault(); pickHomeCard(1); return; }
+        if (e.code === 'Digit3' || e.code === 'Numpad3') { e.preventDefault(); pickHomeCard(2); return; }
+        if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); pickHomeCard(0); return; }
+        return;
+      }
+      // Snake input
+      if (state === 'snake' || state === 'snakeDead') {
+        if (e.code === 'Escape' || e.code === 'KeyH') { e.preventDefault(); state = 'home'; return; }
+        if (state === 'snakeDead') {
+          if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); resetSnake(); state = 'snake'; }
+          return;
+        }
+        let handled = false;
+        if (e.code === 'ArrowUp' || e.code === 'KeyW')         { queueSnakeDir(0, -1); handled = true; }
+        else if (e.code === 'ArrowDown' || e.code === 'KeyS')  { queueSnakeDir(0, 1);  handled = true; }
+        else if (e.code === 'ArrowLeft' || e.code === 'KeyA')  { queueSnakeDir(-1, 0); handled = true; }
+        else if (e.code === 'ArrowRight' || e.code === 'KeyD') { queueSnakeDir(1, 0);  handled = true; }
+        if (handled) { e.preventDefault(); snakeStarted = true; }
+        return;
+      }
+      // Flappy input
+      if (state === 'flappy' || state === 'flappyDead') {
+        if (e.code === 'Escape' || e.code === 'KeyH') { e.preventDefault(); state = 'home'; return; }
+        if (state === 'flappyDead') {
+          if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); resetFlappy(); state = 'flappy'; }
+          return;
+        }
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+          e.preventDefault();
+          flappyStarted = true;
+          flapJump();
+        }
+        return;
+      }
+      // From runner start/dead screens, ESC/H goes back to home
+      if ((state === 'start' || state === 'dead') && (e.code === 'Escape' || e.code === 'KeyH')) {
+        e.preventDefault(); state = 'home'; return;
+      }
       // Boss cheat code
       if (state === 'running' || state === 'levelup') {
         const ch = e.key && e.key.length === 1 ? e.key.toLowerCase() : '';
@@ -794,6 +860,28 @@
 
       const cp = pageToCanvas(t.pageX, t.pageY);
 
+      // Home: tap a card
+      if (state === 'home') {
+        const hit = homeHitTest(cp.x, cp.y);
+        if (hit >= 0) { pickHomeCard(hit); touchId = null; }
+        return;
+      }
+      // Snake
+      if (state === 'snake' || state === 'snakeDead') {
+        if (cp.y > H - 24) { state = 'home'; return; }
+        if (state === 'snakeDead') { resetSnake(); state = 'snake'; return; }
+        snakeStarted = true;
+        return;
+      }
+      // Flappy
+      if (state === 'flappy' || state === 'flappyDead') {
+        if (cp.y > H - 24) { state = 'home'; return; }
+        if (state === 'flappyDead') { resetFlappy(); state = 'flappy'; return; }
+        flappyStarted = true;
+        flapJump();
+        return;
+      }
+
       // Wheel: handle tap on wheel or close strip
       if (state === 'wheel') {
         const cx = W / 2, cy = H / 2 + 6, R = 92;
@@ -816,6 +904,14 @@
           shopPurchase(hit);
         }
         return;
+      }
+
+      // Start/dead: HOME button (top-left)
+      if (state === 'start' || state === 'dead') {
+        if (cp.x >= 8 && cp.x <= 86 && cp.y >= 8 && cp.y <= 30) {
+          state = 'home';
+          return;
+        }
       }
 
       // Dead: check if tapping REVIVE button area
@@ -856,6 +952,25 @@
       const t = Array.from(e.changedTouches).find(ct => ct.identifier === touchId);
       if (!t) return;
 
+      // Home / Flappy / SnakeDead / FlappyDead: touchstart already handled, ignore touchend
+      if (state === 'home' || state === 'flappy' || state === 'flappyDead' || state === 'snakeDead') {
+        touchId = null; return;
+      }
+      // Snake: convert swipe into direction change
+      if (state === 'snake') {
+        const dx = t.pageX - touchStartX;
+        const dy = t.pageY - touchStartY;
+        if (Math.abs(dx) > 20 || Math.abs(dy) > 20) {
+          if (Math.abs(dx) > Math.abs(dy)) {
+            queueSnakeDir(dx > 0 ? 1 : -1, 0);
+          } else {
+            queueSnakeDir(0, dy > 0 ? 1 : -1);
+          }
+          snakeStarted = true;
+        }
+        touchId = null;
+        return;
+      }
       // Wheel: ignore touchend (no swipe/tap-as-jump on wheel)
       if (state === 'wheel') { touchId = null; return; }
 
@@ -899,6 +1014,25 @@
       if (isTouchDevice) return; // touch handled separately
       const cp = pageToCanvas(e.pageX, e.pageY);
 
+      if (state === 'home') {
+        const hit = homeHitTest(cp.x, cp.y);
+        if (hit >= 0) pickHomeCard(hit);
+        return;
+      }
+      if (state === 'snake' || state === 'snakeDead') {
+        if (cp.y > H - 24) { state = 'home'; return; }
+        if (state === 'snakeDead') { resetSnake(); state = 'snake'; return; }
+        snakeStarted = true;
+        return;
+      }
+      if (state === 'flappy' || state === 'flappyDead') {
+        if (cp.y > H - 24) { state = 'home'; return; }
+        if (state === 'flappyDead') { resetFlappy(); state = 'flappy'; return; }
+        flappyStarted = true;
+        flapJump();
+        return;
+      }
+
       if (state === 'wheel') {
         const cx = W / 2, cy = H / 2 + 6, R = 92;
         const dx = cp.x - cx, dy = cp.y - cy;
@@ -919,6 +1053,13 @@
           shopPurchase(hit);
         }
         return;
+      }
+
+      if (state === 'start' || state === 'dead') {
+        if (cp.x >= 8 && cp.x <= 86 && cp.y >= 8 && cp.y <= 30) {
+          state = 'home';
+          return;
+        }
       }
 
       if (state === 'dead' && totalDiamonds >= REVIVE_COST) {
@@ -2315,7 +2456,503 @@
     }
 
     // ---- Update ----
+    // ---- Snake game ----
+    function spawnSnakeFood() {
+      while (true) {
+        const fx = Math.floor(Math.random() * SNAKE_COLS);
+        const fy = Math.floor(Math.random() * SNAKE_ROWS);
+        if (!snake.some(s => s.x === fx && s.y === fy)) {
+          snakeFood = { x: fx, y: fy };
+          return;
+        }
+      }
+    }
+    function resetSnake() {
+      snake = [{ x: 8, y: 7 }, { x: 7, y: 7 }, { x: 6, y: 7 }];
+      snakeDir = { x: 1, y: 0 };
+      snakeDirQueue = [];
+      snakeScore = 0;
+      snakeTick = 0;
+      snakeTickRate = 12;
+      snakeStarted = false;
+      spawnSnakeFood();
+    }
+    function queueSnakeDir(dx, dy) {
+      const last = snakeDirQueue.length > 0 ? snakeDirQueue[snakeDirQueue.length - 1] : snakeDir;
+      // Block 180° reversal against most recent committed/queued direction
+      if (last.x === -dx && last.y === -dy) return;
+      // Block duplicate (same direction)
+      if (last.x === dx && last.y === dy) return;
+      if (snakeDirQueue.length < 2) snakeDirQueue.push({ x: dx, y: dy });
+      else snakeDirQueue[1] = { x: dx, y: dy }; // replace the second slot if user spams
+    }
+    function updateSnake() {
+      if (state === 'snakeDead') return;
+      if (!snakeStarted) return;
+      snakeTick++;
+      if (snakeTick < snakeTickRate) return;
+      snakeTick = 0;
+      if (snakeDirQueue.length > 0) snakeDir = snakeDirQueue.shift();
+      const head = { x: snake[0].x + snakeDir.x, y: snake[0].y + snakeDir.y };
+      // wall collision
+      if (head.x < 0 || head.x >= SNAKE_COLS || head.y < 0 || head.y >= SNAKE_ROWS) {
+        if (snakeScore > snakeHi) { snakeHi = snakeScore; saveSnakeHi(); }
+        state = 'snakeDead';
+        triggerShake(8, 18);
+        return;
+      }
+      // self collision
+      for (let i = 0; i < snake.length - 1; i++) {
+        if (snake[i].x === head.x && snake[i].y === head.y) {
+          if (snakeScore > snakeHi) { snakeHi = snakeScore; saveSnakeHi(); }
+          state = 'snakeDead';
+          triggerShake(8, 18);
+          return;
+        }
+      }
+      snake.unshift(head);
+      if (snakeFood && head.x === snakeFood.x && head.y === snakeFood.y) {
+        snakeScore++;
+        if (snakeScore % 8 === 0 && snakeTickRate > 6) snakeTickRate--;
+        spawnSnakeFood();
+        spawnParticles(snakeFood.x * SNAKE_CELL + SNAKE_CELL / 2,
+                       snakeFood.y * SNAKE_CELL + SNAKE_CELL / 2 + 24, '#e94560', 10);
+      } else {
+        snake.pop();
+      }
+    }
+    function drawSnake() {
+      // background
+      ctx.fillStyle = '#0b1020';
+      ctx.fillRect(0, 0, W, H);
+      // grid (subtle)
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= SNAKE_COLS; x++) {
+        ctx.beginPath(); ctx.moveTo(x * SNAKE_CELL, 24); ctx.lineTo(x * SNAKE_CELL, 24 + SNAKE_ROWS * SNAKE_CELL); ctx.stroke();
+      }
+      for (let y = 0; y <= SNAKE_ROWS; y++) {
+        ctx.beginPath(); ctx.moveTo(0, 24 + y * SNAKE_CELL); ctx.lineTo(W, 24 + y * SNAKE_CELL); ctx.stroke();
+      }
+      // border
+      ctx.strokeStyle = '#40c9a2'; ctx.lineWidth = 2;
+      ctx.strokeRect(1, 25, W - 2, SNAKE_ROWS * SNAKE_CELL - 2);
+      // food
+      if (snakeFood) {
+        const fx = snakeFood.x * SNAKE_CELL + SNAKE_CELL / 2;
+        const fy = snakeFood.y * SNAKE_CELL + 24 + SNAKE_CELL / 2;
+        ctx.shadowColor = '#e94560'; ctx.shadowBlur = 10;
+        ctx.fillStyle = '#e94560';
+        ctx.beginPath(); ctx.arc(fx, fy, SNAKE_CELL / 2 - 3, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      // snake
+      for (let i = 0; i < snake.length; i++) {
+        const s = snake[i];
+        const sx = s.x * SNAKE_CELL;
+        const sy = s.y * SNAKE_CELL + 24;
+        if (i === 0) {
+          ctx.fillStyle = '#7ee8fa';
+          ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 8;
+        } else {
+          const t = i / snake.length;
+          ctx.fillStyle = `hsl(${170 - t * 30}, 70%, ${55 - t * 20}%)`;
+          ctx.shadowBlur = 0;
+        }
+        ctx.fillRect(sx + 1, sy + 1, SNAKE_CELL - 2, SNAKE_CELL - 2);
+        if (i === 0) {
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#1a1a2e';
+          const eyeSize = 3;
+          const ex1 = sx + SNAKE_CELL / 2 + snakeDir.x * 4 - (snakeDir.x === 0 ? 4 : 0);
+          const ey1 = sy + SNAKE_CELL / 2 + snakeDir.y * 4 - (snakeDir.y === 0 ? 4 : 0);
+          const ex2 = sx + SNAKE_CELL / 2 + snakeDir.x * 4 + (snakeDir.x === 0 ? 4 : 0);
+          const ey2 = sy + SNAKE_CELL / 2 + snakeDir.y * 4 + (snakeDir.y === 0 ? 4 : 0);
+          ctx.fillRect(ex1 - eyeSize / 2, ey1 - eyeSize / 2, eyeSize, eyeSize);
+          ctx.fillRect(ex2 - eyeSize / 2, ey2 - eyeSize / 2, eyeSize, eyeSize);
+        }
+      }
+      // HUD
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 14px Courier New';
+      ctx.fillText('SCORE: ' + snakeScore, 8, 6);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#f5a623';
+      ctx.fillText('BEST: ' + snakeHi, W - 8, 6);
+      ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+      // overlays
+      if (!snakeStarted && state === 'snake') {
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 36px Courier New';
+        ctx.fillText('SNAKE', W / 2, H / 2 - 30);
+        ctx.fillStyle = '#aaa'; ctx.font = '15px Courier New';
+        ctx.fillText(isTouchDevice ? 'SWIPE to move' : 'ARROW KEYS / WASD to move', W / 2, H / 2 + 2);
+        ctx.fillStyle = '#7ee8fa'; ctx.font = '14px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to start' : 'PRESS A KEY to start', W / 2, H / 2 + 28);
+        ctx.fillStyle = '#555'; ctx.font = '12px Courier New';
+        ctx.fillText('ESC / H — back to home', W / 2, H - 14);
+        ctx.textAlign = 'left';
+      }
+      if (state === 'snakeDead') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#e94560'; ctx.font = 'bold 40px Courier New';
+        ctx.shadowColor = '#e94560'; ctx.shadowBlur = 14;
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff'; ctx.font = '18px Courier New';
+        ctx.fillText('Score: ' + snakeScore + '   Best: ' + snakeHi, W / 2, H / 2 + 2);
+        ctx.fillStyle = '#7ee8fa'; ctx.font = '14px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 32);
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(isTouchDevice ? 'TAP HERE to go home' : 'ESC / H — back to home', W / 2, H - 14);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    // ---- Flappy bird ----
+    function resetFlappy() {
+      flappyBird = { x: 200, y: H / 2, vy: 0, w: 28, h: 22, rot: 0 };
+      flappyPipes = [];
+      flappyScore = 0;
+      flappyStarted = false;
+      flappyDeadTimer = 0;
+      flappyNextPipe = 80;
+    }
+    function flapJump() {
+      flappyBird.vy = -5.8;
+      spawnParticles(flappyBird.x - 6, flappyBird.y + 8, '#ffe066', 4);
+    }
+    function updateFlappy() {
+      if (state === 'flappyDead') {
+        flappyDeadTimer++;
+        flappyBird.vy += 0.5;
+        flappyBird.y += flappyBird.vy;
+        flappyBird.rot = Math.min(Math.PI / 2, flappyBird.rot + 0.08);
+        if (flappyBird.y > H - 24) { flappyBird.y = H - 24; flappyBird.vy = 0; }
+        return;
+      }
+      if (!flappyStarted) {
+        // hover
+        flappyBird.y = H / 2 + Math.sin(frame * 0.08) * 6;
+        return;
+      }
+      flappyBird.vy += 0.36;
+      if (flappyBird.vy > 7.5) flappyBird.vy = 7.5;
+      flappyBird.y += flappyBird.vy;
+      flappyBird.rot = Math.max(-0.4, Math.min(1.2, flappyBird.vy * 0.08));
+      // spawn pipes
+      flappyNextPipe--;
+      if (flappyNextPipe <= 0) {
+        // Variable pipe sizes — roll for normal/wide gaps and thin/fat pipes (no super-tight pipes)
+        const sizeRoll = Math.random();
+        let gap, pw;
+        if (sizeRoll < 0.25) {           // 25% — wide & thin (easy breather)
+          gap = 150; pw = 38;
+        } else if (sizeRoll < 0.40) {    // 15% — fat pipes (long tunnel, generous gap)
+          gap = 130; pw = 64;
+        } else {                          // 60% — standard but roomy
+          gap = 125; pw = 46;
+        }
+        const minY = 40, maxY = H - 50 - gap;
+        const gy = minY + Math.random() * (maxY - minY);
+        flappyPipes.push({ x: W + 20, gy, gap, w: pw, passed: false });
+        // Spawn distance scales with pipe width — extra room overall
+        flappyNextPipe = 120 + Math.round(pw * 0.6);
+      }
+      // move pipes + score + collide
+      for (let i = flappyPipes.length - 1; i >= 0; i--) {
+        const p = flappyPipes[i];
+        p.x -= 2.4;
+        if (!p.passed && p.x + p.w < flappyBird.x) {
+          p.passed = true;
+          flappyScore++;
+          spawnFloatText(flappyBird.x, flappyBird.y - 20, '+1', '#ffe066');
+        }
+        if (p.x + p.w < -20) flappyPipes.splice(i, 1);
+      }
+      // collisions (hitbox is slightly smaller than the visual sprite for lenience)
+      const hbW = flappyBird.w - 8;
+      const hbH = flappyBird.h - 6;
+      const bx = flappyBird.x - hbW / 2;
+      const by = flappyBird.y - hbH / 2;
+      let hit = false;
+      if (by < 0 || by + hbH > H - 8) hit = true;
+      for (const p of flappyPipes) {
+        if (bx + hbW > p.x && bx < p.x + p.w) {
+          if (by < p.gy || by + hbH > p.gy + p.gap) { hit = true; break; }
+        }
+      }
+      if (hit) {
+        if (flappyScore > flappyHi) { flappyHi = flappyScore; saveFlappyHi(); }
+        state = 'flappyDead';
+        flappyDeadTimer = 0;
+        triggerShake(10, 22);
+        spawnParticles(flappyBird.x, flappyBird.y, '#ffe066', 18);
+      }
+    }
+    function drawFlappy() {
+      // sky gradient
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#4ec0e8');
+      g.addColorStop(1, '#8ed8f0');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      // background hills
+      ctx.fillStyle = '#1a8a3a';
+      for (let i = 0; i < 5; i++) {
+        const hx = ((i * 220) - (frame * 0.3) % 220);
+        ctx.beginPath();
+        ctx.ellipse(hx, H - 8, 130, 50, 0, Math.PI, 0);
+        ctx.fill();
+      }
+      // ground strip
+      ctx.fillStyle = '#3a8a3a';
+      ctx.fillRect(0, H - 8, W, 8);
+      ctx.fillStyle = '#256a25';
+      for (let x = -(frame * 3 % 16); x < W; x += 16) ctx.fillRect(x, H - 8, 8, 2);
+      // pipes
+      for (const p of flappyPipes) {
+        ctx.fillStyle = '#5fbf5f';
+        ctx.fillRect(p.x, 0, p.w, p.gy);
+        ctx.fillRect(p.x, p.gy + p.gap, p.w, H - p.gy - p.gap - 8);
+        // pipe rims
+        ctx.fillStyle = '#3f8f3f';
+        ctx.fillRect(p.x - 4, p.gy - 14, p.w + 8, 14);
+        ctx.fillRect(p.x - 4, p.gy + p.gap, p.w + 8, 14);
+        // highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillRect(p.x + 4, 0, 4, p.gy - 14);
+        ctx.fillRect(p.x + 4, p.gy + p.gap + 14, 4, H - p.gy - p.gap - 22);
+      }
+      // bird
+      ctx.save();
+      ctx.translate(flappyBird.x, flappyBird.y);
+      ctx.rotate(flappyBird.rot);
+      // body
+      ctx.fillStyle = '#ffe066';
+      ctx.beginPath(); ctx.ellipse(0, 0, flappyBird.w / 2, flappyBird.h / 2, 0, 0, Math.PI * 2); ctx.fill();
+      // wing
+      ctx.fillStyle = '#f5a623';
+      const wingY = Math.sin(frame * 0.35) * 3;
+      ctx.beginPath(); ctx.ellipse(-3, 2 + wingY, 8, 5, 0, 0, Math.PI * 2); ctx.fill();
+      // eye
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(7, -3, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a1a2e';
+      ctx.beginPath(); ctx.arc(8, -3, 2, 0, Math.PI * 2); ctx.fill();
+      // beak
+      ctx.fillStyle = '#e94560';
+      ctx.beginPath();
+      ctx.moveTo(12, 0); ctx.lineTo(20, -2); ctx.lineTo(20, 3); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // HUD score
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillStyle = '#fff'; ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+      ctx.font = 'bold 32px Courier New';
+      ctx.fillText(String(flappyScore), W / 2, 16);
+      ctx.shadowBlur = 0;
+      ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+      // overlays
+      if (!flappyStarted && state === 'flappy') {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffe066'; ctx.font = 'bold 36px Courier New';
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 8;
+        ctx.fillText('FLAPPY BIRD', W / 2, H / 2 - 30);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff'; ctx.font = '15px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to flap' : 'SPACE / UP to flap', W / 2, H / 2 + 2);
+        ctx.fillStyle = '#ffe066'; ctx.font = '14px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to start' : 'PRESS SPACE to start', W / 2, H / 2 + 28);
+        ctx.fillStyle = '#eef'; ctx.font = '12px Courier New';
+        ctx.fillText('BEST: ' + flappyHi, W / 2, H / 2 + 56);
+        ctx.fillStyle = '#ccc';
+        ctx.fillText('ESC / H — back to home', W / 2, H - 14);
+        ctx.textAlign = 'left';
+      }
+      if (state === 'flappyDead') {
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#e94560'; ctx.font = 'bold 40px Courier New';
+        ctx.shadowColor = '#e94560'; ctx.shadowBlur = 14;
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff'; ctx.font = '18px Courier New';
+        ctx.fillText('Score: ' + flappyScore + '   Best: ' + flappyHi, W / 2, H / 2 + 2);
+        ctx.fillStyle = '#ffe066'; ctx.font = '14px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 32);
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(isTouchDevice ? 'TAP HERE to go home' : 'ESC / H — back to home', W / 2, H - 14);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    // ---- Home menu ----
+    const HOME_CARDS = [
+      { id: 'runner',  label: 'RUNNER',      color: '#e94560', sub: 'endless arcade' },
+      { id: 'snake',   label: 'SNAKE',       color: '#40c9a2', sub: 'eat & grow' },
+      { id: 'flappy',  label: 'FLAPPY BIRD', color: '#ffe066', sub: 'tap to fly' },
+    ];
+    function homeCardRect(i) {
+      const cardW = 200, cardH = 150, gap = 24;
+      const total = 3 * cardW + 2 * gap;
+      const startX = (W - total) / 2;
+      const y = H / 2 - cardH / 2 + 14;
+      return { x: startX + i * (cardW + gap), y, w: cardW, h: cardH };
+    }
+    function homeHitTest(cx, cy) {
+      for (let i = 0; i < HOME_CARDS.length; i++) {
+        const r = homeCardRect(i);
+        if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) return i;
+      }
+      return -1;
+    }
+    function pickHomeCard(i) {
+      const c = HOME_CARDS[i];
+      if (!c) return;
+      if (c.id === 'runner') { state = 'start'; }
+      else if (c.id === 'snake') { resetSnake(); state = 'snake'; }
+      else if (c.id === 'flappy') { resetFlappy(); state = 'flappy'; }
+    }
+    function drawHome() {
+      // background gradient
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#0f0e17');
+      g.addColorStop(1, '#1a1a2e');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      // stars
+      for (const s of stars) {
+        ctx.fillStyle = `rgba(200,220,255,${0.3 + Math.sin(frame * 0.02 + s.x) * 0.2})`;
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+      }
+      // title
+      ctx.textAlign = 'center';
+      ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 18;
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 36px Courier New';
+      ctx.fillText('ARCADE', W / 2, 50);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#aaa'; ctx.font = '13px Courier New';
+      ctx.fillText(isTouchDevice ? 'TAP a game to play' : 'CLICK or press 1/2/3 to play', W / 2, 72);
+      // cards
+      for (let i = 0; i < HOME_CARDS.length; i++) {
+        const c = HOME_CARDS[i];
+        const r = homeCardRect(i);
+        // card bg
+        ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+        ctx.strokeStyle = c.color; ctx.lineWidth = 2;
+        roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
+        // mini preview
+        ctx.save();
+        ctx.translate(r.x + r.w / 2, r.y + 50);
+        if (c.id === 'runner') {
+          // little running figure
+          const sk = getSkin();
+          ctx.fillStyle = sk.body;
+          ctx.fillRect(-10, -16, 20, 24);
+          ctx.fillStyle = sk.visorBg;
+          ctx.fillRect(-7, -12, 14, 8);
+          ctx.fillStyle = sk.visor;
+          ctx.fillRect(-5, -10, 10, 4);
+          ctx.fillStyle = sk.legs;
+          const legSwing = Math.sin(frame * 0.2) * 4;
+          ctx.fillRect(-8, 8, 5, 10 + legSwing);
+          ctx.fillRect(3, 8, 5, 10 - legSwing);
+        } else if (c.id === 'snake') {
+          // mini snake
+          const seg = 8;
+          for (let k = 0; k < 6; k++) {
+            const t = k / 6;
+            ctx.fillStyle = k === 0 ? '#7ee8fa' : `hsl(${170 - t * 30}, 70%, ${55 - t * 20}%)`;
+            ctx.fillRect(-22 + k * seg, -seg / 2, seg - 1, seg - 1);
+          }
+          ctx.fillStyle = '#e94560';
+          ctx.beginPath(); ctx.arc(22, 0, 4, 0, Math.PI * 2); ctx.fill();
+        } else if (c.id === 'flappy') {
+          // mini bird with wing flap
+          const wingY = Math.sin(frame * 0.25) * 3;
+          ctx.fillStyle = '#ffe066';
+          ctx.beginPath(); ctx.ellipse(0, 0, 14, 11, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#f5a623';
+          ctx.beginPath(); ctx.ellipse(-3, 2 + wingY, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(5, -2, 3, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#1a1a2e';
+          ctx.beginPath(); ctx.arc(6, -2, 1.5, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#e94560';
+          ctx.beginPath();
+          ctx.moveTo(9, 0); ctx.lineTo(16, -1); ctx.lineTo(16, 2); ctx.closePath(); ctx.fill();
+        }
+        ctx.restore();
+        // label
+        ctx.fillStyle = c.color; ctx.font = 'bold 18px Courier New';
+        ctx.fillText(c.label, r.x + r.w / 2, r.y + r.h - 38);
+        ctx.fillStyle = '#888'; ctx.font = '11px Courier New';
+        ctx.fillText(c.sub, r.x + r.w / 2, r.y + r.h - 22);
+        // best
+        let best = 0;
+        if (c.id === 'runner') best = hiScore;
+        else if (c.id === 'snake') best = snakeHi;
+        else if (c.id === 'flappy') best = flappyHi;
+        ctx.fillStyle = '#f5a623'; ctx.font = '11px Courier New';
+        ctx.fillText('BEST: ' + best, r.x + r.w / 2, r.y + r.h - 8);
+        // hotkey badge (desktop)
+        if (!isTouchDevice) {
+          ctx.fillStyle = 'rgba(255,255,255,0.08)';
+          roundRect(r.x + r.w - 28, r.y + 8, 20, 20, 4); ctx.fill();
+          ctx.fillStyle = '#eee'; ctx.font = 'bold 12px Courier New';
+          ctx.fillText(String(i + 1), r.x + r.w - 18, r.y + 22);
+        }
+      }
+      ctx.textAlign = 'left';
+    }
+
     function update() {
+      // Home: passive animation only
+      if (state === 'home') {
+        frame++;
+        for (const s of stars) {
+          s.x -= s.s * 0.4;
+          if (s.x < 0) s.x = W;
+        }
+        if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
+        return;
+      }
+      // Snake
+      if (state === 'snake' || state === 'snakeDead') {
+        frame++;
+        updateSnake();
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
+          if (p.life <= 0) particles.splice(i, 1);
+        }
+        if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
+        return;
+      }
+      // Flappy
+      if (state === 'flappy' || state === 'flappyDead') {
+        frame++;
+        updateFlappy();
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
+          if (p.life <= 0) particles.splice(i, 1);
+        }
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+          const ft = floatingTexts[i];
+          ft.life -= 0.018; ft.y += ft.vy;
+          if (ft.life <= 0) floatingTexts.splice(i, 1);
+        }
+        if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
+        return;
+      }
       // Level-up transition
       if (state === 'levelup') {
         frame++;
@@ -3272,6 +3909,71 @@
 
     // ---- Draw ----
     function draw() {
+      // Hide HUD bar during home / snake / flappy
+      const uiEl = document.getElementById('ui');
+      const isArcadeGame = state === 'home' || state === 'snake' || state === 'snakeDead' || state === 'flappy' || state === 'flappyDead';
+      uiEl.style.visibility = isArcadeGame ? 'hidden' : 'visible';
+
+      // Home / Snake / Flappy own their entire frame
+      if (state === 'home') {
+        ctx.save();
+        if (screenShake > 0) {
+          const fade = screenShake / 22;
+          const m = shakeMag * fade;
+          ctx.translate((Math.random() - 0.5) * m * 2, (Math.random() - 0.5) * m * 2);
+        }
+        drawHome();
+        ctx.restore();
+        return;
+      }
+      if (state === 'snake' || state === 'snakeDead') {
+        ctx.save();
+        if (screenShake > 0) {
+          const fade = screenShake / 22;
+          const m = shakeMag * fade;
+          ctx.translate((Math.random() - 0.5) * m * 2, (Math.random() - 0.5) * m * 2);
+        }
+        drawSnake();
+        // particles overlay (for food eat puff)
+        for (const p of particles) {
+          ctx.globalAlpha = p.life;
+          ctx.fillStyle = p.color;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return;
+      }
+      if (state === 'flappy' || state === 'flappyDead') {
+        ctx.save();
+        if (screenShake > 0) {
+          const fade = screenShake / 22;
+          const m = shakeMag * fade;
+          ctx.translate((Math.random() - 0.5) * m * 2, (Math.random() - 0.5) * m * 2);
+        }
+        drawFlappy();
+        for (const p of particles) {
+          ctx.globalAlpha = p.life;
+          ctx.fillStyle = p.color;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        }
+        for (const ft of floatingTexts) {
+          ctx.save();
+          ctx.globalAlpha = ft.life;
+          ctx.translate(ft.x, ft.y);
+          ctx.scale(ft.scale, ft.scale);
+          ctx.shadowColor = ft.color; ctx.shadowBlur = 8;
+          ctx.fillStyle = ft.color;
+          ctx.font = 'bold 26px Courier New';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(ft.text, 0, 0);
+          ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return;
+      }
+
       const theme = getTheme();
 
       // Apply screen shake by translating the whole frame
@@ -3473,6 +4175,12 @@
       if (state === 'start') {
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(0, 0, W, H);
+        // back-to-home button (top-left)
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        roundRect(8, 8, 78, 22, 4); ctx.fill();
+        ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 12px Courier New';
+        ctx.fillText(isTouchDevice ? '← HOME' : 'H — HOME', 16, 23);
         ctx.textAlign = 'center';
         ctx.fillStyle = COL.text;
         ctx.font = 'bold 48px Courier New';
@@ -3686,6 +4394,12 @@
       if (state === 'dead') {
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(0, 0, W, H);
+        // back-to-home button (top-left)
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        roundRect(8, 8, 78, 22, 4); ctx.fill();
+        ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 12px Courier New';
+        ctx.fillText(isTouchDevice ? '← HOME' : 'H — HOME', 16, 23);
         ctx.textAlign = 'center';
         ctx.fillStyle = COL.ground;
         ctx.font = 'bold 42px Courier New';
