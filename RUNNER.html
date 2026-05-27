@@ -243,7 +243,11 @@
 
     // ---- Shop / persistent upgrades ----
     const REVIVE_COST = 15;
+    const COINS_PER_DIAMOND = 5; // exchange rate when paying with coins instead of diamonds
+    const ARCADE_REVIVE_COST = 3; // cheaper revive cost in snake/flappy
     let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
+    let coinBank = parseInt(localStorage.getItem('runner_coinBank') || '0');
+    function saveCoinBank() { localStorage.setItem('runner_coinBank', coinBank); }
     let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
     let ownedUpgrades = JSON.parse(localStorage.getItem('runner_ownedUpgrades') || 'null');
     if (!ownedUpgrades) {
@@ -273,7 +277,7 @@
     //   2) Build → Realtime Database → Create database (regio bv. europe-west1)
     //   3) Tabblad "Rules" → vervang door:  { "rules": { ".read": true, ".write": true } }  → Publish
     //   4) Kopieer de DB-URL uit het Data-tabblad en plak hieronder (bv. https://jouwproject-default-rtdb.europe-west1.firebasedatabase.app)
-    const PRESENCE_URL = ''; // leeg = uit
+    const PRESENCE_URL = 'https://thorrunner-bee78-default-rtdb.europe-west1.firebasedatabase.app/'; // leeg = uit
     let playerId = localStorage.getItem('runner_playerId') ||
       (localStorage.setItem('runner_playerId', 'p' + Math.random().toString(36).slice(2, 11)),
        localStorage.getItem('runner_playerId'));
@@ -350,6 +354,8 @@
       dinosaur:{ body: '#3a8a3a', visor: '#ffe040', visorBg: '#0a2a0a', legs: '#256a25', jump: '#5fbf5f', dinosaur: true },
       phoenix: { body: '#e84a0e', visor: '#fff080', visorBg: '#2a0808', legs: '#b03208', jump: '#ffb040', phoenix: true },
       alien:   { body: '#7a40c0', visor: '#80ffaa', visorBg: '#1a0030', legs: '#5a2090', jump: '#a070ff', alien: true },
+      admin:   { body: '#1e6ec7', visor: '#ffe890', visorBg: '#0a2a55', legs: '#143b6a', jump: '#3a8edb', admin: true },
+      thorren: { body: '#2a3a8a', visor: '#80e8ff', visorBg: '#0a0e30', legs: '#152066', jump: '#a0d8ff', thorren: true },
     };
     function getSkin() { return SKINS[activeSkin] || SKINS.default; }
 
@@ -377,6 +383,31 @@
       { key: 'alien',         name: 'ALIEN SKIN',     desc: 'Antennae, helm & cosmic glow',     cost: 100, color: '#7a40c0', type: 'skin' },
     ];
 
+    // Hidden skins — added to shop only when unlocked via a cheat code typed in the shop
+    const ADMIN_SHOP_ITEM   = { key: 'admin',   name: 'ADMIN SKIN',   desc: 'Cap, shades & gold chain — exclusive', cost: 200, color: '#1e6ec7', type: 'skin' };
+    const THORREN_SHOP_ITEM = { key: 'thorren', name: 'THORREN SKIN', desc: 'Thunder god — hammer, horns & lightning', cost: 250, color: '#80e8ff', type: 'skin' };
+    let adminSkinUnlocked   = localStorage.getItem('runner_adminUnlocked')   === '1';
+    let thorrenSkinUnlocked = localStorage.getItem('runner_thorrenUnlocked') === '1';
+    if (adminSkinUnlocked)   SHOP_ITEMS.push(ADMIN_SHOP_ITEM);
+    if (thorrenSkinUnlocked) SHOP_ITEMS.push(THORREN_SHOP_ITEM);
+    let shopCheatBuf = '';
+    function unlockAdminSkin() {
+      if (adminSkinUnlocked) return;
+      adminSkinUnlocked = true;
+      localStorage.setItem('runner_adminUnlocked', '1');
+      SHOP_ITEMS.push(ADMIN_SHOP_ITEM);
+      shopSelection = SHOP_ITEMS.length - 1;
+      spawnFloatText(W / 2, H / 2 - 30, 'ADMIN SKIN UNLOCKED', '#ffe066');
+    }
+    function unlockThorrenSkin() {
+      if (thorrenSkinUnlocked) return;
+      thorrenSkinUnlocked = true;
+      localStorage.setItem('runner_thorrenUnlocked', '1');
+      SHOP_ITEMS.push(THORREN_SHOP_ITEM);
+      shopSelection = SHOP_ITEMS.length - 1;
+      spawnFloatText(W / 2, H / 2 - 30, 'THORREN SKIN UNLOCKED', '#80e8ff');
+    }
+
     function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
     function saveUpgrades() { localStorage.setItem('runner_upgrades', JSON.stringify(upgrades)); }
     function saveOwnedUpgrades() { localStorage.setItem('runner_ownedUpgrades', JSON.stringify(ownedUpgrades)); }
@@ -392,6 +423,19 @@
     let snake = [];
     let snakeDir = { x: 1, y: 0 };
     let snakeDirQueue = []; // up to 2 queued direction changes (prevents 180° reversal from rapid taps)
+    let snakeCoins = [];     // [{x,y}] grid positions, picking up adds to coinBank
+    let snakeDiamonds = [];  // [{x,y}] grid positions, picking up adds to totalDiamonds
+    // Fixed interior wall layout (one short bar in each quadrant — keeps middle row open)
+    const SNAKE_WALLS = [
+      { x: 8, y: 3 }, { x: 9, y: 3 }, { x: 10, y: 3 },
+      { x: 29, y: 3 }, { x: 30, y: 3 }, { x: 31, y: 3 },
+      { x: 8, y: 9 }, { x: 9, y: 9 }, { x: 10, y: 9 },
+      { x: 29, y: 9 }, { x: 30, y: 9 }, { x: 31, y: 9 },
+    ];
+    function isSnakeWall(x, y) {
+      for (const w of SNAKE_WALLS) if (w.x === x && w.y === y) return true;
+      return false;
+    }
     let snakeFood = null;
     let snakeScore = 0;
     let snakeTick = 0;
@@ -403,10 +447,17 @@
     // ---- Flappy bird state ----
     let flappyBird = { x: 200, y: H / 2, vy: 0, w: 28, h: 22, rot: 0 };
     let flappyPipes = [];
+    let flappyPickups = []; // [{x, y, type:'coin'|'diamond', r}]
     let flappyScore = 0;
     let flappyStarted = false;
     let flappyDeadTimer = 0;
     let flappyNextPipe = 0;
+    // Powerup state
+    let snakeSlowTimer = 0;        // frames remaining of slow-mo
+    let snakeWallhackTimer = 0;    // frames remaining of wallhack (pass through walls, wrap edges)
+    let flappySlowTimer = 0;       // frames remaining of slow-mo
+    let flappyShield = false;      // armed shield (absorbs next collision)
+    let flappyInvincTimer = 0;     // brief invuln after shield is consumed
     let flappyHi = parseInt(localStorage.getItem('runner_flappyHi') || '0');
     function saveFlappyHi() { localStorage.setItem('runner_flappyHi', flappyHi); }
 
@@ -658,10 +709,20 @@
     const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
     // ---- Revive: pay diamonds to resume from where you died ----
+    const REVIVE_COIN_COST = REVIVE_COST * COINS_PER_DIAMOND;
+    function canRevive() {
+      return state === 'dead' && (totalDiamonds >= REVIVE_COST || coinBank >= REVIVE_COIN_COST);
+    }
     function revive() {
-      if (state !== 'dead' || totalDiamonds < REVIVE_COST) return;
-      totalDiamonds -= REVIVE_COST;
-      saveDiamonds();
+      if (state !== 'dead') return;
+      // Prefer diamonds, fall back to coins
+      if (totalDiamonds >= REVIVE_COST) {
+        totalDiamonds -= REVIVE_COST;
+        saveDiamonds();
+      } else if (coinBank >= REVIVE_COIN_COST) {
+        coinBank -= REVIVE_COIN_COST;
+        saveCoinBank();
+      } else return;
       lives = 3;
       invincible = 180;
       endSlide();
@@ -674,6 +735,24 @@
     }
 
     // ---- Shop purchase logic (shared by keyboard & touch) ----
+    // Deduct from diamonds if possible, otherwise coins. Returns true on success.
+    function payShopCost(diamondCost) {
+      if (totalDiamonds >= diamondCost) {
+        totalDiamonds -= diamondCost;
+        saveDiamonds();
+        return true;
+      }
+      const coinCost = diamondCost * COINS_PER_DIAMOND;
+      if (coinBank >= coinCost) {
+        coinBank -= coinCost;
+        saveCoinBank();
+        return true;
+      }
+      return false;
+    }
+    function canAfford(diamondCost) {
+      return totalDiamonds >= diamondCost || coinBank >= diamondCost * COINS_PER_DIAMOND;
+    }
     function shopPurchase(idx) {
       if (idx === undefined) idx = shopSelection;
       const item = SHOP_ITEMS[idx];
@@ -681,11 +760,9 @@
         if (ownedSkins.includes(item.key)) {
           activeSkin = item.key;
           saveActiveSkin();
-        } else if (totalDiamonds >= item.cost) {
-          totalDiamonds -= item.cost;
+        } else if (payShopCost(item.cost)) {
           ownedSkins.push(item.key);
           activeSkin = item.key;
-          saveDiamonds();
           saveOwnedSkins();
           saveActiveSkin();
         }
@@ -694,11 +771,9 @@
           // Already owned — toggle active state on/off.
           upgrades[item.key] = !upgrades[item.key];
           saveUpgrades();
-        } else if (totalDiamonds >= item.cost) {
-          totalDiamonds -= item.cost;
+        } else if (payShopCost(item.cost)) {
           ownedUpgrades[item.key] = true;
           upgrades[item.key] = true;
-          saveDiamonds();
           saveUpgrades();
           saveOwnedUpgrades();
         }
@@ -735,9 +810,12 @@
       if (state === 'snake' || state === 'snakeDead') {
         if (e.code === 'Escape' || e.code === 'KeyH') { e.preventDefault(); state = 'home'; return; }
         if (state === 'snakeDead') {
+          if (e.code === 'KeyR') { e.preventDefault(); reviveSnake(); return; }
           if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); resetSnake(); state = 'snake'; }
           return;
         }
+        if (e.code === 'Digit1' || e.code === 'Numpad1') { e.preventDefault(); activateSnakePowerup(1); return; }
+        if (e.code === 'Digit2' || e.code === 'Numpad2') { e.preventDefault(); activateSnakePowerup(2); return; }
         let handled = false;
         if (e.code === 'ArrowUp' || e.code === 'KeyW')         { queueSnakeDir(0, -1); handled = true; }
         else if (e.code === 'ArrowDown' || e.code === 'KeyS')  { queueSnakeDir(0, 1);  handled = true; }
@@ -750,9 +828,12 @@
       if (state === 'flappy' || state === 'flappyDead') {
         if (e.code === 'Escape' || e.code === 'KeyH') { e.preventDefault(); state = 'home'; return; }
         if (state === 'flappyDead') {
+          if (e.code === 'KeyR') { e.preventDefault(); reviveFlappy(); return; }
           if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); resetFlappy(); state = 'flappy'; }
           return;
         }
+        if (e.code === 'Digit1' || e.code === 'Numpad1') { e.preventDefault(); activateFlappyPowerup(1); return; }
+        if (e.code === 'Digit2' || e.code === 'Numpad2') { e.preventDefault(); activateFlappyPowerup(2); return; }
         if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
           e.preventDefault();
           flappyStarted = true;
@@ -801,6 +882,20 @@
       // Shop navigation
       if (state === 'shop') {
         e.preventDefault();
+        // Cheat: typing a code unlocks a hidden skin. Buffer keeps last 7 chars for the longest code.
+        const ch = e.key && e.key.length === 1 ? e.key.toLowerCase() : '';
+        if (ch >= 'a' && ch <= 'z') {
+          shopCheatBuf = (shopCheatBuf + ch).slice(-7);
+          if (shopCheatBuf.endsWith('admin'))   { shopCheatBuf = ''; unlockAdminSkin();   return; }
+          if (shopCheatBuf.endsWith('thorren')) { shopCheatBuf = ''; unlockThorrenSkin(); return; }
+          // While building a known cheat prefix, swallow keys (so 's' doesn't close the shop mid-code)
+          const isMidCheat = shopCheatBuf.length > 0 && (
+            'admin'.startsWith(shopCheatBuf) || 'thorren'.startsWith(shopCheatBuf)
+          );
+          if (isMidCheat) return;
+        } else {
+          shopCheatBuf = '';
+        }
         if (e.code === 'ArrowUp') shopSelection = (shopSelection + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
         if (e.code === 'ArrowDown') shopSelection = (shopSelection + 1) % SHOP_ITEMS.length;
         if (e.code === 'Space' || e.code === 'Enter') shopPurchase();
@@ -868,15 +963,35 @@
       }
       // Snake
       if (state === 'snake' || state === 'snakeDead') {
+        if (state === 'snake' && snakeStarted) {
+          if (inRect(cp, snakeSlowBtnRect()))   { activateSnakePowerup(1); touchId = null; return; }
+          if (inRect(cp, snakeShrinkBtnRect())) { activateSnakePowerup(2); touchId = null; return; }
+        }
         if (cp.y > H - 24) { state = 'home'; return; }
-        if (state === 'snakeDead') { resetSnake(); state = 'snake'; return; }
+        if (state === 'snakeDead') {
+          if (cp.y > H / 2 + 6 && cp.y < H / 2 + 32 && cp.x > W / 2 - 150 && cp.x < W / 2 + 150 && canArcadeRevive()) {
+            reviveSnake();
+            return;
+          }
+          resetSnake(); state = 'snake'; return;
+        }
         snakeStarted = true;
         return;
       }
       // Flappy
       if (state === 'flappy' || state === 'flappyDead') {
+        if (state === 'flappy' && flappyStarted) {
+          if (inRect(cp, flappySlowBtnRect()))   { activateFlappyPowerup(1); touchId = null; return; }
+          if (inRect(cp, flappyShieldBtnRect())) { activateFlappyPowerup(2); touchId = null; return; }
+        }
         if (cp.y > H - 24) { state = 'home'; return; }
-        if (state === 'flappyDead') { resetFlappy(); state = 'flappy'; return; }
+        if (state === 'flappyDead') {
+          if (cp.y > H / 2 + 6 && cp.y < H / 2 + 32 && cp.x > W / 2 - 150 && cp.x < W / 2 + 150 && canArcadeRevive()) {
+            reviveFlappy();
+            return;
+          }
+          resetFlappy(); state = 'flappy'; return;
+        }
         flappyStarted = true;
         flapJump();
         return;
@@ -915,7 +1030,7 @@
       }
 
       // Dead: check if tapping REVIVE button area
-      if (state === 'dead' && totalDiamonds >= REVIVE_COST) {
+      if (state === 'dead' && canRevive()) {
         if (cp.y > H / 2 + 30 - 14 && cp.y < H / 2 + 30 + 10 &&
             cp.x > W / 2 - 140 && cp.x < W / 2 + 140) {
           revive();
@@ -1020,14 +1135,34 @@
         return;
       }
       if (state === 'snake' || state === 'snakeDead') {
+        if (state === 'snake' && snakeStarted) {
+          if (inRect(cp, snakeSlowBtnRect()))   { activateSnakePowerup(1); return; }
+          if (inRect(cp, snakeShrinkBtnRect())) { activateSnakePowerup(2); return; }
+        }
         if (cp.y > H - 24) { state = 'home'; return; }
-        if (state === 'snakeDead') { resetSnake(); state = 'snake'; return; }
+        if (state === 'snakeDead') {
+          if (cp.y > H / 2 + 6 && cp.y < H / 2 + 32 && cp.x > W / 2 - 150 && cp.x < W / 2 + 150 && canArcadeRevive()) {
+            reviveSnake();
+            return;
+          }
+          resetSnake(); state = 'snake'; return;
+        }
         snakeStarted = true;
         return;
       }
       if (state === 'flappy' || state === 'flappyDead') {
+        if (state === 'flappy' && flappyStarted) {
+          if (inRect(cp, flappySlowBtnRect()))   { activateFlappyPowerup(1); return; }
+          if (inRect(cp, flappyShieldBtnRect())) { activateFlappyPowerup(2); return; }
+        }
         if (cp.y > H - 24) { state = 'home'; return; }
-        if (state === 'flappyDead') { resetFlappy(); state = 'flappy'; return; }
+        if (state === 'flappyDead') {
+          if (cp.y > H / 2 + 6 && cp.y < H / 2 + 32 && cp.x > W / 2 - 150 && cp.x < W / 2 + 150 && canArcadeRevive()) {
+            reviveFlappy();
+            return;
+          }
+          resetFlappy(); state = 'flappy'; return;
+        }
         flappyStarted = true;
         flapJump();
         return;
@@ -1062,7 +1197,7 @@
         }
       }
 
-      if (state === 'dead' && totalDiamonds >= REVIVE_COST) {
+      if (state === 'dead' && canRevive()) {
         if (cp.y > H / 2 + 30 - 14 && cp.y < H / 2 + 30 + 10 &&
             cp.x > W / 2 - 140 && cp.x < W / 2 + 140) {
           revive();
@@ -1325,6 +1460,40 @@
         }
         ctx.fill();
 
+        // Admin: shades over side-visor + flat cap brim + chain on flat body (slide mode)
+        if (skin.admin) {
+          // Mini pixelated sunglasses on the side visor
+          ctx.fillStyle = '#0c0c0c';
+          ctx.fillRect(sw / 2 - 11, -sh + 7, 8, 4);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(sw / 2 - 9, -sh + 8, 1, 1);
+          ctx.fillRect(sw / 2 - 6, -sh + 8, 1, 1);
+          // Tan brim hanging forward in slide
+          ctx.fillStyle = '#b8965a';
+          ctx.strokeStyle = '#7a5a28';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.ellipse(sw / 2 - 2, -sh + 2, 9, 2, 0, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+          // Green dome (squashed flat in slide)
+          ctx.fillStyle = '#6a8a3a';
+          ctx.strokeStyle = '#3a5a18';
+          ctx.beginPath();
+          ctx.ellipse(sw / 2 - 8, -sh + 1, 6, 3, 0, Math.PI, 0);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Gold chain dangling under the flat body
+          ctx.fillStyle = '#ffd700';
+          ctx.strokeStyle = '#8a6a00';
+          ctx.lineWidth = 0.6;
+          for (let i = 0; i < 5; i++) {
+            const lx = -sw / 2 + 6 + i * 4;
+            ctx.beginPath();
+            ctx.ellipse(lx, -2, 1.8, 1.2, i % 2 === 0 ? 0.3 : -0.3, 0, Math.PI * 2);
+            ctx.fill(); ctx.stroke();
+          }
+        }
+
         // Ninja scarf while sliding
         if (skin.ninja) {
           const w1 = Math.sin(frame * 0.12) * 5;
@@ -1336,6 +1505,42 @@
           ctx.moveTo(-sw / 2 + 2, -sh + 4);
           ctx.quadraticCurveTo(-sw / 2 - 10, -sh + 2 + w1, -sw / 2 - 18, -sh + 6 + w2);
           ctx.stroke();
+        }
+
+        // Thorren: lightning aura + hammer trailing behind (slide mode)
+        if (skin.thorren) {
+          const pulse = 0.55 + Math.sin(frame * 0.13) * 0.35;
+          // Electric trail behind body
+          ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 10 * pulse;
+          ctx.fillStyle = `rgba(128,200,255,${0.15 * pulse})`;
+          roundRect(-sw / 2 - 3, -sh - 2, sw + 6, sh, 5);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          // Crackles
+          for (let i = 0; i < 3; i++) {
+            const lx = -sw / 2 - 6 - i * 5;
+            const ly = -sh / 2 + Math.sin(frame * 0.2 + i) * 4;
+            ctx.strokeStyle = `rgba(200,235,255,${0.6 + Math.sin(frame * 0.3 + i) * 0.3})`;
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.moveTo(lx, ly - 3);
+            ctx.lineTo(lx + 2, ly - 1);
+            ctx.lineTo(lx - 1, ly + 1);
+            ctx.lineTo(lx + 2, ly + 3);
+            ctx.stroke();
+          }
+          // Mini hammer dragging behind the back of the body
+          const hammerY = -sh - 2 + Math.sin(frame * 0.1) * 1;
+          ctx.save();
+          ctx.translate(-sw / 2 - 4, hammerY);
+          ctx.rotate(-0.35);
+          ctx.fillStyle = '#5a3018';
+          ctx.fillRect(-1, -1, 2, 10);
+          ctx.fillStyle = '#9aa0a8';
+          ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1;
+          roundRect(-5, -5, 10, 5, 1);
+          ctx.fill(); ctx.stroke();
+          ctx.restore();
         }
       } else {
         const lean = player.onGround ? Math.sin(player.legPhase * 0.5) * 0.08 : -0.15;
@@ -1878,6 +2083,207 @@
           ctx.fillStyle = '#3366ff';
           ctx.beginPath(); ctx.arc(-6, -ph - 3, 1.5, 0, Math.PI * 2); ctx.fill();
           ctx.beginPath(); ctx.arc(6, -ph - 3, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Admin: gold chain + baseball cap + pixelated shades
+        if (skin.admin) {
+          // Gold chain across the chest — series of overlapping links forming a U
+          ctx.save();
+          const chainY = -14;
+          const linkCount = 9;
+          const chainSpan = pw - 4;
+          for (let i = 0; i < linkCount; i++) {
+            const t = i / (linkCount - 1);
+            const lx = -chainSpan / 2 + t * chainSpan;
+            // Slight sag toward the middle
+            const sag = Math.sin(t * Math.PI) * 4;
+            const ly = chainY + sag;
+            ctx.fillStyle = i % 2 === 0 ? '#ffd700' : '#f5b800';
+            ctx.strokeStyle = '#8a6a00';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.ellipse(lx, ly, 2.4, 1.6, i % 2 === 0 ? 0.4 : -0.4, 0, Math.PI * 2);
+            ctx.fill(); ctx.stroke();
+          }
+          // Chain highlight glints
+          ctx.fillStyle = 'rgba(255,255,200,0.7)';
+          ctx.beginPath(); ctx.arc(-3, chainY + 3.5, 0.9, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(4, chainY + 3.5, 0.9, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+
+          // Baseball cap — green dome + tan brim sticking forward
+          ctx.save();
+          // Dome
+          ctx.fillStyle = '#6a8a3a';
+          ctx.strokeStyle = '#3a5a18';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.ellipse(1, -ph + 1, pw / 2 + 1, 8, 0, Math.PI, 0);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Dome shading
+          ctx.fillStyle = 'rgba(255,255,255,0.10)';
+          ctx.beginPath();
+          ctx.ellipse(-2, -ph - 2, pw / 2 - 2, 4, 0, Math.PI, 0);
+          ctx.fill();
+          // Brim — flat tan ellipse extending forward (rightward, since player faces right)
+          ctx.fillStyle = '#b8965a';
+          ctx.strokeStyle = '#7a5a28';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.ellipse(8, -ph + 3, 14, 3, 0, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+          // Brim shading
+          ctx.fillStyle = 'rgba(0,0,0,0.18)';
+          ctx.beginPath();
+          ctx.ellipse(10, -ph + 4, 10, 1.5, 0, 0, Math.PI);
+          ctx.fill();
+          ctx.restore();
+
+          // Pixelated "deal with it" sunglasses — overlap the visor area
+          ctx.save();
+          const px2 = 2; // pixel size
+          // Lens block layout (each cell is 2x2 px) — a chunky 8-bit pair of shades
+          // Pattern: 0=transparent, 1=black, 2=white highlight
+          const shadePattern = [
+            '011111110011111110',
+            '111111111111111111',
+            '111121111111111121',
+            '111211111111112111',
+            '111111111111111111',
+            '011111100011111100',
+          ];
+          const startX = -pw / 2 + 2;
+          const startY = -ph + 10;
+          for (let r = 0; r < shadePattern.length; r++) {
+            for (let c = 0; c < shadePattern[r].length; c++) {
+              const v = shadePattern[r][c];
+              if (v === '0') continue;
+              ctx.fillStyle = v === '2' ? '#ffffff' : '#0c0c0c';
+              ctx.fillRect(startX + c * px2 * 0.78, startY + r * px2, px2, px2);
+            }
+          }
+          // Side temple (arm of glasses) toward the back of head
+          ctx.fillStyle = '#0c0c0c';
+          ctx.fillRect(startX - 2, startY + 4, 3, 2);
+          ctx.restore();
+        }
+
+        // Thorren: electric aura + jagged crown + floating hammer
+        if (skin.thorren) {
+          const pulse = 0.55 + Math.sin(frame * 0.13) * 0.35;
+
+          // Electric aura behind body — soft cyan glow with crackling lightning
+          ctx.save();
+          ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 16 * pulse;
+          ctx.fillStyle = `rgba(128,200,255,${0.12 * pulse})`;
+          roundRect(-pw / 2 - 3, -ph - 3, pw + 6, ph - 4, 9);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          // Lightning crackles around the silhouette
+          for (let i = 0; i < 4; i++) {
+            const ang = frame * 0.10 + i * (Math.PI / 2);
+            const orbitR = 18 + Math.sin(frame * 0.18 + i) * 3;
+            const lx = Math.cos(ang) * orbitR;
+            const ly = -ph / 2 + Math.sin(ang) * orbitR * 0.7;
+            ctx.strokeStyle = `rgba(200,235,255,${0.55 + Math.sin(frame * 0.25 + i) * 0.35})`;
+            ctx.lineWidth = 1.4;
+            ctx.shadowColor = '#a0d8ff'; ctx.shadowBlur = 5;
+            ctx.beginPath();
+            ctx.moveTo(lx, ly - 5);
+            ctx.lineTo(lx + 2.5, ly - 1);
+            ctx.lineTo(lx - 1.5, ly + 1);
+            ctx.lineTo(lx + 2, ly + 5);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+          }
+          ctx.restore();
+
+          // Jagged horned crown on the head
+          ctx.fillStyle = '#c89a30';
+          ctx.strokeStyle = '#6a4818';
+          ctx.lineWidth = 1;
+          // Center peak (forked lightning shape)
+          ctx.beginPath();
+          ctx.moveTo(-3, -ph + 2);
+          ctx.lineTo(-4, -ph - 4);
+          ctx.lineTo(-1, -ph - 4);
+          ctx.lineTo(-2, -ph - 11);
+          ctx.lineTo(2, -ph - 7);
+          ctx.lineTo(0, -ph - 4);
+          ctx.lineTo(3, -ph - 4);
+          ctx.lineTo(4, -ph + 2);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Left horn (curved outward)
+          ctx.beginPath();
+          ctx.moveTo(-10, -ph + 1);
+          ctx.lineTo(-15, -ph - 9);
+          ctx.lineTo(-8, -ph - 2);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Right horn
+          ctx.beginPath();
+          ctx.moveTo(10, -ph + 1);
+          ctx.lineTo(15, -ph - 9);
+          ctx.lineTo(8, -ph - 2);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+          // Crown gem
+          ctx.fillStyle = '#80e8ff';
+          ctx.shadowColor = '#80e8ff'; ctx.shadowBlur = 6;
+          ctx.beginPath(); ctx.arc(0, -ph - 4, 1.6, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Floating hammer above the head — slowly bobbing
+          const hammerY = -ph - 18 + Math.sin(frame * 0.09) * 2;
+          const hammerR = Math.sin(frame * 0.06) * 0.18;
+          ctx.save();
+          ctx.translate(2, hammerY);
+          ctx.rotate(hammerR);
+          // Handle
+          ctx.fillStyle = '#5a3018';
+          ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1;
+          ctx.fillRect(-1.2, -2, 2.4, 13);
+          ctx.strokeRect(-1.2, -2, 2.4, 13);
+          // Pommel
+          ctx.fillStyle = '#c89a30';
+          ctx.beginPath(); ctx.arc(0, 11, 1.6, 0, Math.PI * 2); ctx.fill();
+          // Head
+          ctx.fillStyle = '#9aa0a8';
+          ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1;
+          roundRect(-7, -6, 14, 7, 1.5);
+          ctx.fill(); ctx.stroke();
+          // Highlight strip
+          ctx.fillStyle = '#cdd2d8';
+          ctx.fillRect(-6, -5, 12, 1.2);
+          // Electric arcs zapping from head
+          ctx.strokeStyle = `rgba(180,235,255,${0.55 + Math.sin(frame * 0.32) * 0.4})`;
+          ctx.lineWidth = 1.3;
+          ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 5;
+          ctx.beginPath();
+          ctx.moveTo(-6, -3); ctx.lineTo(-3, -1); ctx.lineTo(-7, 2); ctx.lineTo(-2, 4);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(6, -4); ctx.lineTo(3, -1); ctx.lineTo(7, 2); ctx.lineTo(3, 5);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.restore();
+
+          // Trailing energy tassels at the body's bottom edge (the "skirt" in the sketch)
+          for (let i = 0; i < 5; i++) {
+            const tx = -pw / 2 + 4 + i * ((pw - 8) / 4);
+            const wob = Math.sin(frame * 0.12 + i * 0.7) * 2;
+            ctx.strokeStyle = `rgba(160,220,255,${0.5 + Math.sin(frame * 0.18 + i) * 0.3})`;
+            ctx.lineWidth = 1.6;
+            ctx.lineCap = 'round';
+            ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 4;
+            ctx.beginPath();
+            ctx.moveTo(tx, -14);
+            ctx.quadraticCurveTo(tx + wob, -8, tx + wob * 0.5, -2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+          }
         }
 
         // Ninja: trailing scarf ribbons
@@ -2457,15 +2863,115 @@
 
     // ---- Update ----
     // ---- Snake game ----
-    function spawnSnakeFood() {
-      while (true) {
+    // Shared payment helper — pay a coin cost, with diamond fallback at the conversion rate
+    function payArcadeCoinCost(coinCost) {
+      if (coinBank >= coinCost) { coinBank -= coinCost; saveCoinBank(); return true; }
+      const dCost = Math.ceil(coinCost / COINS_PER_DIAMOND);
+      if (totalDiamonds >= dCost) { totalDiamonds -= dCost; saveDiamonds(); return true; }
+      return false;
+    }
+    function canAffordArcadeCoin(coinCost) {
+      return coinBank >= coinCost || totalDiamonds >= Math.ceil(coinCost / COINS_PER_DIAMOND);
+    }
+    const SNAKE_SLOW_COST = 5, SNAKE_WALLHACK_COST = 15;
+    const FLAPPY_SLOW_COST = 5, FLAPPY_SHIELD_COST = 15;
+    function activateSnakePowerup(n) {
+      if (state !== 'snake' || !snakeStarted) return;
+      if (n === 1) {
+        if (snakeSlowTimer > 0) return;
+        if (!payArcadeCoinCost(SNAKE_SLOW_COST)) return;
+        snakeSlowTimer = 300; // 5s at 60fps
+        spawnFloatText(W / 2, H / 2 - 30, 'SLOW MO', '#7ee8fa');
+      } else {
+        if (snakeWallhackTimer > 0) return;
+        if (!payArcadeCoinCost(SNAKE_WALLHACK_COST)) return;
+        snakeWallhackTimer = 360; // 6s at 60fps
+        spawnFloatText(W / 2, H / 2 - 30, 'WALLHACK', '#c08aff');
+      }
+    }
+    function activateFlappyPowerup(n) {
+      if (state !== 'flappy' || !flappyStarted) return;
+      if (n === 1) {
+        if (flappySlowTimer > 0) return;
+        if (!payArcadeCoinCost(FLAPPY_SLOW_COST)) return;
+        flappySlowTimer = 240; // 4s
+        spawnFloatText(W / 2, H / 2 - 30, 'SLOW MO', '#7ee8fa');
+      } else {
+        if (flappyShield) return;
+        if (!payArcadeCoinCost(FLAPPY_SHIELD_COST)) return;
+        flappyShield = true;
+        spawnFloatText(W / 2, H / 2 - 30, 'SHIELD ARMED', '#7ee8fa');
+      }
+    }
+
+    // Arcade-game button rects (also used for hit-tests)
+    function snakeSlowBtnRect()    { return { x: W / 2 - 140, y: 4, w: 110, h: 18 }; }
+    function snakeShrinkBtnRect()  { return { x: W / 2 + 10,  y: 4, w: 130, h: 18 }; }
+    function flappySlowBtnRect()   { return { x: 8,           y: 4, w: 110, h: 20 }; }
+    function flappyShieldBtnRect() { return { x: W - 118,     y: 4, w: 110, h: 20 }; }
+    function inRect(cp, r) { return cp.x >= r.x && cp.x <= r.x + r.w && cp.y >= r.y && cp.y <= r.y + r.h; }
+
+    // Shared revive helper for snake/flappy mini-games
+    const ARCADE_REVIVE_COIN_COST = ARCADE_REVIVE_COST * COINS_PER_DIAMOND;
+    function canArcadeRevive() {
+      return totalDiamonds >= ARCADE_REVIVE_COST || coinBank >= ARCADE_REVIVE_COIN_COST;
+    }
+    function payArcadeRevive() {
+      if (totalDiamonds >= ARCADE_REVIVE_COST) {
+        totalDiamonds -= ARCADE_REVIVE_COST; saveDiamonds(); return true;
+      }
+      if (coinBank >= ARCADE_REVIVE_COIN_COST) {
+        coinBank -= ARCADE_REVIVE_COIN_COST; saveCoinBank(); return true;
+      }
+      return false;
+    }
+    function reviveSnake() {
+      if (state !== 'snakeDead' || !payArcadeRevive()) return;
+      // Keep body, score, walls, pickups — just unlock the loop again
+      state = 'snake';
+      snakeStarted = false;
+      snakeDirQueue = [];
+      snakeTick = 0;
+      spawnParticles(snake[0].x * SNAKE_CELL + SNAKE_CELL / 2,
+                     snake[0].y * SNAKE_CELL + SNAKE_CELL / 2 + 24, '#7ee8fa', 18);
+    }
+    function reviveFlappy() {
+      if (state !== 'flappyDead' || !payArcadeRevive()) return;
+      // Reset bird, clear nearby pipes/pickups so revive isn't instant death
+      flappyBird.x = 200; flappyBird.y = H / 2; flappyBird.vy = 0; flappyBird.rot = 0;
+      flappyPipes = flappyPipes.filter(p => p.x > 360);
+      flappyPickups = flappyPickups.filter(pk => pk.x > 360);
+      flappyStarted = false;
+      flappyDeadTimer = 0;
+      flappyNextPipe = Math.max(flappyNextPipe, 90);
+      state = 'flappy';
+      spawnParticles(flappyBird.x, flappyBird.y, '#7ee8fa', 18);
+    }
+
+    function findEmptySnakeCell() {
+      for (let tries = 0; tries < 100; tries++) {
         const fx = Math.floor(Math.random() * SNAKE_COLS);
         const fy = Math.floor(Math.random() * SNAKE_ROWS);
-        if (!snake.some(s => s.x === fx && s.y === fy)) {
-          snakeFood = { x: fx, y: fy };
-          return;
-        }
+        if (isSnakeWall(fx, fy)) continue;
+        if (snake.some(s => s.x === fx && s.y === fy)) continue;
+        if (snakeFood && snakeFood.x === fx && snakeFood.y === fy) continue;
+        if (snakeCoins.some(c => c.x === fx && c.y === fy)) continue;
+        if (snakeDiamonds.some(d => d.x === fx && d.y === fy)) continue;
+        return { x: fx, y: fy };
       }
+      return null;
+    }
+    function spawnSnakeFood() {
+      const cell = findEmptySnakeCell();
+      if (cell) snakeFood = cell;
+    }
+    function spawnSnakeCoin() {
+      const cell = findEmptySnakeCell();
+      if (cell) snakeCoins.push(cell);
+    }
+    function spawnSnakeDiamond() {
+      const cell = findEmptySnakeCell();
+      if (cell) snakeDiamonds.push(cell);
     }
     function resetSnake() {
       snake = [{ x: 8, y: 7 }, { x: 7, y: 7 }, { x: 6, y: 7 }];
@@ -2475,7 +2981,13 @@
       snakeTick = 0;
       snakeTickRate = 12;
       snakeStarted = false;
+      snakeCoins = [];
+      snakeDiamonds = [];
+      snakeSlowTimer = 0;
+      snakeWallhackTimer = 0;
       spawnSnakeFood();
+      spawnSnakeCoin();
+      spawnSnakeCoin();
     }
     function queueSnakeDir(dx, dy) {
       const last = snakeDirQueue.length > 0 ? snakeDirQueue[snakeDirQueue.length - 1] : snakeDir;
@@ -2489,13 +3001,22 @@
     function updateSnake() {
       if (state === 'snakeDead') return;
       if (!snakeStarted) return;
+      if (snakeSlowTimer > 0) snakeSlowTimer--;
+      if (snakeWallhackTimer > 0) snakeWallhackTimer--;
       snakeTick++;
-      if (snakeTick < snakeTickRate) return;
+      const effectiveRate = snakeSlowTimer > 0 ? snakeTickRate * 2 : snakeTickRate;
+      if (snakeTick < effectiveRate) return;
       snakeTick = 0;
       if (snakeDirQueue.length > 0) snakeDir = snakeDirQueue.shift();
       const head = { x: snake[0].x + snakeDir.x, y: snake[0].y + snakeDir.y };
-      // wall collision
-      if (head.x < 0 || head.x >= SNAKE_COLS || head.y < 0 || head.y >= SNAKE_ROWS) {
+      if (snakeWallhackTimer > 0) {
+        // Wrap edges and pass through interior walls
+        if (head.x < 0) head.x = SNAKE_COLS - 1;
+        else if (head.x >= SNAKE_COLS) head.x = 0;
+        if (head.y < 0) head.y = SNAKE_ROWS - 1;
+        else if (head.y >= SNAKE_ROWS) head.y = 0;
+        // (interior walls intentionally skipped)
+      } else if (head.x < 0 || head.x >= SNAKE_COLS || head.y < 0 || head.y >= SNAKE_ROWS || isSnakeWall(head.x, head.y)) {
         if (snakeScore > snakeHi) { snakeHi = snakeScore; saveSnakeHi(); }
         state = 'snakeDead';
         triggerShake(8, 18);
@@ -2511,12 +3032,35 @@
         }
       }
       snake.unshift(head);
+      // Coin pickup (doesn't grow snake)
+      for (let i = snakeCoins.length - 1; i >= 0; i--) {
+        if (snakeCoins[i].x === head.x && snakeCoins[i].y === head.y) {
+          snakeCoins.splice(i, 1);
+          coinBank += 1; saveCoinBank();
+          spawnParticles(head.x * SNAKE_CELL + SNAKE_CELL / 2,
+                         head.y * SNAKE_CELL + SNAKE_CELL / 2 + 24, '#ffe066', 10);
+          break;
+        }
+      }
+      // Diamond pickup
+      for (let i = snakeDiamonds.length - 1; i >= 0; i--) {
+        if (snakeDiamonds[i].x === head.x && snakeDiamonds[i].y === head.y) {
+          snakeDiamonds.splice(i, 1);
+          totalDiamonds += 1; saveDiamonds();
+          spawnParticles(head.x * SNAKE_CELL + SNAKE_CELL / 2,
+                         head.y * SNAKE_CELL + SNAKE_CELL / 2 + 24, '#40c9a2', 14);
+          break;
+        }
+      }
+      // Food (grows snake + may seed new pickups)
       if (snakeFood && head.x === snakeFood.x && head.y === snakeFood.y) {
         snakeScore++;
         if (snakeScore % 8 === 0 && snakeTickRate > 6) snakeTickRate--;
         spawnSnakeFood();
         spawnParticles(snakeFood.x * SNAKE_CELL + SNAKE_CELL / 2,
                        snakeFood.y * SNAKE_CELL + SNAKE_CELL / 2 + 24, '#e94560', 10);
+        if (snakeCoins.length < 3 && Math.random() < 0.55) spawnSnakeCoin();
+        if (snakeDiamonds.length < 1 && Math.random() < 0.12) spawnSnakeDiamond();
       } else {
         snake.pop();
       }
@@ -2525,6 +3069,11 @@
       // background
       ctx.fillStyle = '#0b1020';
       ctx.fillRect(0, 0, W, H);
+      // slow-mo blue tint
+      if (snakeSlowTimer > 0) {
+        ctx.fillStyle = 'rgba(126,232,250,0.08)';
+        ctx.fillRect(0, 0, W, H);
+      }
       // grid (subtle)
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
       ctx.lineWidth = 1;
@@ -2537,6 +3086,49 @@
       // border
       ctx.strokeStyle = '#40c9a2'; ctx.lineWidth = 2;
       ctx.strokeRect(1, 25, W - 2, SNAKE_ROWS * SNAKE_CELL - 2);
+      // interior walls
+      for (const w of SNAKE_WALLS) {
+        const wx = w.x * SNAKE_CELL;
+        const wy = w.y * SNAKE_CELL + 24;
+        ctx.fillStyle = '#5a4a2a';
+        ctx.fillRect(wx + 1, wy + 1, SNAKE_CELL - 2, SNAKE_CELL - 2);
+        ctx.fillStyle = '#8a7a4a';
+        ctx.fillRect(wx + 2, wy + 2, SNAKE_CELL - 6, 3);
+        ctx.fillStyle = '#3a2e1a';
+        ctx.fillRect(wx + 2, wy + SNAKE_CELL - 5, SNAKE_CELL - 4, 2);
+      }
+      // coins
+      for (const c of snakeCoins) {
+        const cx = c.x * SNAKE_CELL + SNAKE_CELL / 2;
+        const cy = c.y * SNAKE_CELL + 24 + SNAKE_CELL / 2;
+        const r = SNAKE_CELL / 2 - 4 + Math.sin(frame * 0.12 + c.x) * 0.6;
+        ctx.shadowColor = '#ffe066'; ctx.shadowBlur = 8;
+        ctx.fillStyle = '#ffe066';
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#b8932a';
+        ctx.beginPath(); ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      // diamonds
+      for (const d of snakeDiamonds) {
+        const dx = d.x * SNAKE_CELL + SNAKE_CELL / 2;
+        const dy = d.y * SNAKE_CELL + 24 + SNAKE_CELL / 2;
+        const r = SNAKE_CELL / 2 - 3;
+        ctx.save();
+        ctx.translate(dx, dy);
+        ctx.rotate(frame * 0.05);
+        ctx.shadowColor = '#40c9a2'; ctx.shadowBlur = 10;
+        ctx.fillStyle = '#7df0c8';
+        ctx.beginPath();
+        ctx.moveTo(0, -r); ctx.lineTo(r * 0.85, 0); ctx.lineTo(0, r); ctx.lineTo(-r * 0.85, 0);
+        ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(0, -r * 0.6); ctx.lineTo(r * 0.3, -r * 0.1); ctx.lineTo(-r * 0.2, -r * 0.1);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
       // food
       if (snakeFood) {
         const fx = snakeFood.x * SNAKE_CELL + SNAKE_CELL / 2;
@@ -2547,19 +3139,30 @@
         ctx.shadowBlur = 0;
       }
       // snake
+      const wallhackOn = snakeWallhackTimer > 0;
+      const wallhackPulse = wallhackOn ? 0.6 + Math.sin(frame * 0.2) * 0.3 : 0;
       for (let i = 0; i < snake.length; i++) {
         const s = snake[i];
         const sx = s.x * SNAKE_CELL;
         const sy = s.y * SNAKE_CELL + 24;
         if (i === 0) {
-          ctx.fillStyle = '#7ee8fa';
-          ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 8;
+          ctx.fillStyle = wallhackOn ? '#e0c0ff' : '#7ee8fa';
+          ctx.shadowColor = wallhackOn ? '#c08aff' : '#7ee8fa';
+          ctx.shadowBlur = wallhackOn ? 12 + wallhackPulse * 6 : 8;
         } else {
-          const t = i / snake.length;
-          ctx.fillStyle = `hsl(${170 - t * 30}, 70%, ${55 - t * 20}%)`;
-          ctx.shadowBlur = 0;
+          if (wallhackOn) {
+            const t = i / snake.length;
+            ctx.fillStyle = `hsl(${280 - t * 20}, 65%, ${60 - t * 15}%)`;
+            ctx.shadowColor = '#c08aff'; ctx.shadowBlur = 6 + wallhackPulse * 3;
+          } else {
+            const t = i / snake.length;
+            ctx.fillStyle = `hsl(${170 - t * 30}, 70%, ${55 - t * 20}%)`;
+            ctx.shadowBlur = 0;
+          }
         }
+        ctx.globalAlpha = wallhackOn ? 0.7 + Math.sin(frame * 0.18 + i * 0.4) * 0.2 : 1;
         ctx.fillRect(sx + 1, sy + 1, SNAKE_CELL - 2, SNAKE_CELL - 2);
+        ctx.globalAlpha = 1;
         if (i === 0) {
           ctx.shadowBlur = 0;
           ctx.fillStyle = '#1a1a2e';
@@ -2572,13 +3175,45 @@
           ctx.fillRect(ex2 - eyeSize / 2, ey2 - eyeSize / 2, eyeSize, eyeSize);
         }
       }
+      ctx.shadowBlur = 0;
       // HUD
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 14px Courier New';
       ctx.fillText('SCORE: ' + snakeScore, 8, 6);
+      // Coin + diamond bank
+      ctx.font = 'bold 12px Courier New';
+      ctx.fillStyle = '#ffe066';
+      ctx.fillText('● ' + coinBank, 140, 8);
+      ctx.fillStyle = '#40c9a2';
+      ctx.fillText('◆ ' + totalDiamonds, 220, 8);
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#f5a623';
+      ctx.fillStyle = '#f5a623'; ctx.font = 'bold 14px Courier New';
       ctx.fillText('BEST: ' + snakeHi, W - 8, 6);
+      // Powerup buttons (center of HUD)
+      if (snakeStarted && state === 'snake') {
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+        const r1 = snakeSlowBtnRect();
+        const slowOk = canAffordArcadeCoin(SNAKE_SLOW_COST);
+        const slowActive = snakeSlowTimer > 0;
+        ctx.fillStyle = slowActive ? 'rgba(126,232,250,0.35)' : (slowOk ? 'rgba(126,232,250,0.10)' : 'rgba(60,60,60,0.20)');
+        roundRect(r1.x, r1.y, r1.w, r1.h, 3); ctx.fill();
+        ctx.strokeStyle = slowOk ? '#7ee8fa' : '#444'; ctx.lineWidth = 1;
+        roundRect(r1.x, r1.y, r1.w, r1.h, 3); ctx.stroke();
+        ctx.fillStyle = slowOk ? '#7ee8fa' : '#666';
+        ctx.font = 'bold 10px Courier New';
+        ctx.fillText('[1] SLOW ●' + SNAKE_SLOW_COST, r1.x + r1.w / 2, r1.y + r1.h / 2);
+
+        const r2 = snakeShrinkBtnRect();
+        const wallOk = canAffordArcadeCoin(SNAKE_WALLHACK_COST);
+        const wallActive = snakeWallhackTimer > 0;
+        ctx.fillStyle = wallActive ? 'rgba(192,138,255,0.40)' : (wallOk ? 'rgba(192,138,255,0.10)' : 'rgba(60,60,60,0.20)');
+        roundRect(r2.x, r2.y, r2.w, r2.h, 3); ctx.fill();
+        ctx.strokeStyle = wallOk || wallActive ? '#c08aff' : '#444';
+        roundRect(r2.x, r2.y, r2.w, r2.h, 3); ctx.stroke();
+        ctx.fillStyle = wallOk || wallActive ? '#c08aff' : '#666';
+        ctx.fillText('[2] WALLHACK ●' + SNAKE_WALLHACK_COST, r2.x + r2.w / 2, r2.y + r2.h / 2);
+      }
       ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
       // overlays
       if (!snakeStarted && state === 'snake') {
@@ -2601,14 +3236,20 @@
         ctx.textAlign = 'center';
         ctx.fillStyle = '#e94560'; ctx.font = 'bold 40px Courier New';
         ctx.shadowColor = '#e94560'; ctx.shadowBlur = 14;
-        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 40);
         ctx.shadowBlur = 0;
-        ctx.fillStyle = '#fff'; ctx.font = '18px Courier New';
-        ctx.fillText('Score: ' + snakeScore + '   Best: ' + snakeHi, W / 2, H / 2 + 2);
-        ctx.fillStyle = '#7ee8fa'; ctx.font = '14px Courier New';
-        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 32);
+        ctx.fillStyle = '#fff'; ctx.font = '16px Courier New';
+        ctx.fillText('Score: ' + snakeScore + '   Best: ' + snakeHi, W / 2, H / 2 - 8);
+        // Revive (pay with diamonds OR coins)
+        const reviveOk = canArcadeRevive();
+        ctx.fillStyle = reviveOk ? '#7ee8fa' : '#555';
+        ctx.font = 'bold 15px Courier New';
+        ctx.fillText((isTouchDevice ? 'TAP HERE — REVIVE ' : 'R — REVIVE ')
+                     + '◆ ' + ARCADE_REVIVE_COST + ' / ● ' + ARCADE_REVIVE_COIN_COST, W / 2, H / 2 + 18);
+        ctx.fillStyle = '#aaa'; ctx.font = '13px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 42);
         ctx.fillStyle = '#aaa';
-        ctx.fillText(isTouchDevice ? 'TAP HERE to go home' : 'ESC / H — back to home', W / 2, H - 14);
+        ctx.fillText(isTouchDevice ? 'TAP bottom to go home' : 'ESC / H — back to home', W / 2, H - 14);
         ctx.textAlign = 'left';
       }
     }
@@ -2617,10 +3258,14 @@
     function resetFlappy() {
       flappyBird = { x: 200, y: H / 2, vy: 0, w: 28, h: 22, rot: 0 };
       flappyPipes = [];
+      flappyPickups = [];
       flappyScore = 0;
       flappyStarted = false;
       flappyDeadTimer = 0;
       flappyNextPipe = 80;
+      flappySlowTimer = 0;
+      flappyShield = false;
+      flappyInvincTimer = 0;
     }
     function flapJump() {
       flappyBird.vy = -5.8;
@@ -2640,12 +3285,15 @@
         flappyBird.y = H / 2 + Math.sin(frame * 0.08) * 6;
         return;
       }
-      flappyBird.vy += 0.36;
+      if (flappySlowTimer > 0) flappySlowTimer--;
+      if (flappyInvincTimer > 0) flappyInvincTimer--;
+      const slowFactor = flappySlowTimer > 0 ? 0.5 : 1;
+      flappyBird.vy += 0.36 * slowFactor;
       if (flappyBird.vy > 7.5) flappyBird.vy = 7.5;
-      flappyBird.y += flappyBird.vy;
+      flappyBird.y += flappyBird.vy * slowFactor;
       flappyBird.rot = Math.max(-0.4, Math.min(1.2, flappyBird.vy * 0.08));
-      // spawn pipes
-      flappyNextPipe--;
+      // spawn pipes (rate also slowed when slow-mo is active)
+      flappyNextPipe -= slowFactor;
       if (flappyNextPipe <= 0) {
         // Variable pipe sizes — roll for normal/wide gaps and thin/fat pipes (no super-tight pipes)
         const sizeRoll = Math.random();
@@ -2660,19 +3308,48 @@
         const minY = 40, maxY = H - 50 - gap;
         const gy = minY + Math.random() * (maxY - minY);
         flappyPipes.push({ x: W + 20, gy, gap, w: pw, passed: false });
+        // Place a pickup in the gap centre: ~55% coin, ~12% diamond, ~33% nothing
+        const pickRoll = Math.random();
+        if (pickRoll < 0.55) {
+          flappyPickups.push({ x: W + 20 + pw / 2, y: gy + gap / 2, type: 'coin', r: 9 });
+        } else if (pickRoll < 0.67) {
+          flappyPickups.push({ x: W + 20 + pw / 2, y: gy + gap / 2, type: 'diamond', r: 9 });
+        }
         // Spawn distance scales with pipe width — extra room overall
         flappyNextPipe = 120 + Math.round(pw * 0.6);
       }
+      const scrollSpd = 2.4 * slowFactor;
       // move pipes + score + collide
       for (let i = flappyPipes.length - 1; i >= 0; i--) {
         const p = flappyPipes[i];
-        p.x -= 2.4;
+        p.x -= scrollSpd;
         if (!p.passed && p.x + p.w < flappyBird.x) {
           p.passed = true;
           flappyScore++;
           spawnFloatText(flappyBird.x, flappyBird.y - 20, '+1', '#ffe066');
         }
         if (p.x + p.w < -20) flappyPipes.splice(i, 1);
+      }
+      // pickups: scroll + collect
+      for (let i = flappyPickups.length - 1; i >= 0; i--) {
+        const pk = flappyPickups[i];
+        pk.x -= scrollSpd;
+        const dx = flappyBird.x - pk.x;
+        const dy = flappyBird.y - pk.y;
+        if (Math.sqrt(dx * dx + dy * dy) < pk.r + 12) {
+          if (pk.type === 'coin') {
+            coinBank += 1; saveCoinBank();
+            spawnFloatText(pk.x, pk.y - 12, '+1●', '#ffe066');
+            spawnParticles(pk.x, pk.y, '#ffe066', 10);
+          } else {
+            totalDiamonds += 1; saveDiamonds();
+            spawnFloatText(pk.x, pk.y - 12, '+1◆', '#40c9a2');
+            spawnParticles(pk.x, pk.y, '#40c9a2', 14);
+          }
+          flappyPickups.splice(i, 1);
+          continue;
+        }
+        if (pk.x < -20) flappyPickups.splice(i, 1);
       }
       // collisions (hitbox is slightly smaller than the visual sprite for lenience)
       const hbW = flappyBird.w - 8;
@@ -2686,12 +3363,22 @@
           if (by < p.gy || by + hbH > p.gy + p.gap) { hit = true; break; }
         }
       }
-      if (hit) {
-        if (flappyScore > flappyHi) { flappyHi = flappyScore; saveFlappyHi(); }
-        state = 'flappyDead';
-        flappyDeadTimer = 0;
-        triggerShake(10, 22);
-        spawnParticles(flappyBird.x, flappyBird.y, '#ffe066', 18);
+      if (hit && flappyInvincTimer <= 0) {
+        if (flappyShield) {
+          flappyShield = false;
+          flappyInvincTimer = 60;
+          // clear pipes within bird's vicinity so revive isn't instant re-death
+          flappyPipes = flappyPipes.filter(p => p.x + p.w < flappyBird.x - 30 || p.x > flappyBird.x + 80);
+          spawnParticles(flappyBird.x, flappyBird.y, '#7ee8fa', 28);
+          spawnFloatText(flappyBird.x, flappyBird.y - 24, 'BLOCKED!', '#7ee8fa');
+          triggerShake(6, 12);
+        } else {
+          if (flappyScore > flappyHi) { flappyHi = flappyScore; saveFlappyHi(); }
+          state = 'flappyDead';
+          flappyDeadTimer = 0;
+          triggerShake(10, 22);
+          spawnParticles(flappyBird.x, flappyBird.y, '#ffe066', 18);
+        }
       }
     }
     function drawFlappy() {
@@ -2728,6 +3415,48 @@
         ctx.fillRect(p.x + 4, 0, 4, p.gy - 14);
         ctx.fillRect(p.x + 4, p.gy + p.gap + 14, 4, H - p.gy - p.gap - 22);
       }
+      // pickups (drawn behind bird)
+      for (const pk of flappyPickups) {
+        if (pk.type === 'coin') {
+          const r = pk.r + Math.sin(frame * 0.14 + pk.x * 0.02) * 1;
+          ctx.shadowColor = '#ffe066'; ctx.shadowBlur = 8;
+          ctx.fillStyle = '#ffe066';
+          ctx.beginPath(); ctx.arc(pk.x, pk.y, r, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#b8932a';
+          ctx.beginPath(); ctx.arc(pk.x, pk.y, r * 0.55, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath(); ctx.arc(pk.x - 2, pk.y - 2, 1.5, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.save();
+          ctx.translate(pk.x, pk.y);
+          ctx.rotate(frame * 0.06);
+          ctx.shadowColor = '#40c9a2'; ctx.shadowBlur = 10;
+          ctx.fillStyle = '#7df0c8';
+          ctx.beginPath();
+          ctx.moveTo(0, -pk.r); ctx.lineTo(pk.r * 0.85, 0); ctx.lineTo(0, pk.r); ctx.lineTo(-pk.r * 0.85, 0);
+          ctx.closePath(); ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.moveTo(0, -pk.r * 0.6); ctx.lineTo(pk.r * 0.3, -pk.r * 0.1); ctx.lineTo(-pk.r * 0.2, -pk.r * 0.1);
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
+      }
+      // shield aura behind bird
+      if (flappyShield || flappyInvincTimer > 0) {
+        const auraAlpha = flappyShield ? 0.7 : 0.3 + Math.sin(frame * 0.3) * 0.2;
+        ctx.fillStyle = `rgba(126,232,250,${auraAlpha * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(flappyBird.x, flappyBird.y, 22 + Math.sin(frame * 0.15) * 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(126,232,250,${auraAlpha})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(flappyBird.x, flappyBird.y, 22 + Math.sin(frame * 0.15) * 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       // bird
       ctx.save();
       ctx.translate(flappyBird.x, flappyBird.y);
@@ -2755,6 +3484,41 @@
       ctx.font = 'bold 32px Courier New';
       ctx.fillText(String(flappyScore), W / 2, 16);
       ctx.shadowBlur = 0;
+      // Powerup buttons (top corners during play)
+      if (flappyStarted && state === 'flappy') {
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+        const r1 = flappySlowBtnRect();
+        const slowOk = canAffordArcadeCoin(FLAPPY_SLOW_COST);
+        const slowActive = flappySlowTimer > 0;
+        ctx.fillStyle = slowActive ? 'rgba(126,232,250,0.45)' : (slowOk ? 'rgba(255,255,255,0.18)' : 'rgba(60,60,60,0.30)');
+        roundRect(r1.x, r1.y, r1.w, r1.h, 3); ctx.fill();
+        ctx.strokeStyle = slowOk ? '#7ee8fa' : '#444'; ctx.lineWidth = 1;
+        roundRect(r1.x, r1.y, r1.w, r1.h, 3); ctx.stroke();
+        ctx.fillStyle = slowOk ? '#0a3050' : '#666';
+        ctx.font = 'bold 10px Courier New';
+        ctx.fillText('[1] SLOW ●' + FLAPPY_SLOW_COST, r1.x + r1.w / 2, r1.y + r1.h / 2);
+
+        const r2 = flappyShieldBtnRect();
+        const shieldOk = canAffordArcadeCoin(FLAPPY_SHIELD_COST) && !flappyShield;
+        ctx.fillStyle = flappyShield ? 'rgba(126,232,250,0.55)' : (shieldOk ? 'rgba(255,255,255,0.18)' : 'rgba(60,60,60,0.30)');
+        roundRect(r2.x, r2.y, r2.w, r2.h, 3); ctx.fill();
+        ctx.strokeStyle = shieldOk ? '#7ee8fa' : (flappyShield ? '#7ee8fa' : '#444');
+        roundRect(r2.x, r2.y, r2.w, r2.h, 3); ctx.stroke();
+        ctx.fillStyle = flappyShield ? '#fff' : (shieldOk ? '#0a3050' : '#666');
+        ctx.fillText(flappyShield ? '[2] ARMED' : '[2] SHIELD ●' + FLAPPY_SHIELD_COST, r2.x + r2.w / 2, r2.y + r2.h / 2);
+      }
+      // Coin + diamond bank (small, under the slow button — visible during play)
+      if (state === 'flappy') {
+        ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+        ctx.font = 'bold 12px Courier New';
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+        ctx.fillStyle = '#ffe066';
+        ctx.fillText('● ' + coinBank, 12, 30);
+        ctx.fillStyle = '#7df0c8';
+        ctx.fillText('◆ ' + totalDiamonds, 70, 30);
+        ctx.shadowBlur = 0;
+      }
       ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
       // overlays
       if (!flappyStarted && state === 'flappy') {
@@ -2781,14 +3545,19 @@
         ctx.textAlign = 'center';
         ctx.fillStyle = '#e94560'; ctx.font = 'bold 40px Courier New';
         ctx.shadowColor = '#e94560'; ctx.shadowBlur = 14;
-        ctx.fillText('GAME OVER', W / 2, H / 2 - 30);
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 40);
         ctx.shadowBlur = 0;
-        ctx.fillStyle = '#fff'; ctx.font = '18px Courier New';
-        ctx.fillText('Score: ' + flappyScore + '   Best: ' + flappyHi, W / 2, H / 2 + 2);
-        ctx.fillStyle = '#ffe066'; ctx.font = '14px Courier New';
-        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 32);
+        ctx.fillStyle = '#fff'; ctx.font = '16px Courier New';
+        ctx.fillText('Score: ' + flappyScore + '   Best: ' + flappyHi, W / 2, H / 2 - 8);
+        const reviveOk = canArcadeRevive();
+        ctx.fillStyle = reviveOk ? '#7ee8fa' : '#555';
+        ctx.font = 'bold 15px Courier New';
+        ctx.fillText((isTouchDevice ? 'TAP HERE — REVIVE ' : 'R — REVIVE ')
+                     + '◆ ' + ARCADE_REVIVE_COST + ' / ● ' + ARCADE_REVIVE_COIN_COST, W / 2, H / 2 + 18);
+        ctx.fillStyle = '#ffe066'; ctx.font = '13px Courier New';
+        ctx.fillText(isTouchDevice ? 'TAP to play again' : 'SPACE — play again', W / 2, H / 2 + 42);
         ctx.fillStyle = '#aaa';
-        ctx.fillText(isTouchDevice ? 'TAP HERE to go home' : 'ESC / H — back to home', W / 2, H - 14);
+        ctx.fillText(isTouchDevice ? 'TAP bottom to go home' : 'ESC / H — back to home', W / 2, H - 14);
         ctx.textAlign = 'left';
       }
     }
@@ -2820,6 +3589,36 @@
       else if (c.id === 'snake') { resetSnake(); state = 'snake'; }
       else if (c.id === 'flappy') { resetFlappy(); state = 'flappy'; }
     }
+    // ---- Online players overlay (rendered on every page when presence is enabled) ----
+    function drawOnlinePanel() {
+      if (!presenceEnabled) return;
+      ctx.save();
+      ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+      // Push panel down in arcade games so it doesn't clash with the top-right HUD elements
+      const isArcade = state === 'snake' || state === 'snakeDead' || state === 'flappy' || state === 'flappyDead';
+      const yOff = isArcade ? 30 : 0;
+      const maxShow = 6;
+      const rows = Math.min(onlinePlayers.length, maxShow) + (onlinePlayers.length > maxShow ? 1 : 0);
+      const panelH = 18 + Math.max(0, rows) * 14 + 6;
+      ctx.fillStyle = 'rgba(0,0,0,0.40)';
+      roundRect(W - 168, 4 + yOff, 160, panelH, 5); ctx.fill();
+      ctx.fillStyle = '#7ee8fa';
+      ctx.font = 'bold 12px Courier New';
+      ctx.fillText('ONLINE: ' + onlinePlayers.length, W - 12, 18 + yOff);
+      ctx.font = '11px Courier New';
+      for (let i = 0; i < Math.min(onlinePlayers.length, maxShow); i++) {
+        const p = onlinePlayers[i];
+        const isMe = p.id === playerId;
+        ctx.fillStyle = isMe ? '#ffe066' : '#cfe9f5';
+        ctx.fillText('• ' + p.name + (isMe ? ' (you)' : ''), W - 12, 34 + yOff + i * 14);
+      }
+      if (onlinePlayers.length > maxShow) {
+        ctx.fillStyle = '#888';
+        ctx.fillText('+' + (onlinePlayers.length - maxShow) + ' more', W - 12, 34 + yOff + maxShow * 14);
+      }
+      ctx.restore();
+    }
+
     function drawHome() {
       // background gradient
       const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -3340,6 +4139,8 @@
           const worth = c.bag ? 10 : c.big ? 5 : 1;
           coinCount  += worth;
           totalCoins += worth;
+          coinBank   += worth;
+          saveCoinBank();
           score += worth * 10;
           spawnParticles(c.x, cy, c.bag ? '#a78bfa' : '#ffe066', c.bag ? 18 : c.big ? 14 : 8);
           addCoinCombo(worth, c.x, cy);
@@ -3924,6 +4725,7 @@
         }
         drawHome();
         ctx.restore();
+        drawOnlinePanel();
         return;
       }
       if (state === 'snake' || state === 'snakeDead') {
@@ -3942,6 +4744,7 @@
         }
         ctx.globalAlpha = 1;
         ctx.restore();
+        drawOnlinePanel();
         return;
       }
       if (state === 'flappy' || state === 'flappyDead') {
@@ -3971,6 +4774,7 @@
         }
         ctx.globalAlpha = 1;
         ctx.restore();
+        drawOnlinePanel();
         return;
       }
 
@@ -4208,27 +5012,6 @@
           ctx.fillText('next spin tomorrow', W / 2, H / 2 + 84);
         }
 
-        // Online players panel (top-right)
-        if (presenceEnabled) {
-          ctx.textAlign = 'right';
-          ctx.fillStyle = '#7ee8fa';
-          ctx.font = 'bold 12px Courier New';
-          ctx.fillText('ONLINE: ' + onlinePlayers.length, W - 12, 18);
-          ctx.font = '11px Courier New';
-          ctx.fillStyle = '#cfe9f5';
-          const maxShow = 6;
-          for (let i = 0; i < Math.min(onlinePlayers.length, maxShow); i++) {
-            const p = onlinePlayers[i];
-            const isMe = p.id === playerId;
-            ctx.fillStyle = isMe ? '#ffe066' : '#cfe9f5';
-            ctx.fillText('• ' + p.name + (isMe ? ' (you)' : ''), W - 12, 34 + i * 14);
-          }
-          if (onlinePlayers.length > maxShow) {
-            ctx.fillStyle = '#888';
-            ctx.fillText('+' + (onlinePlayers.length - maxShow) + ' more', W - 12, 34 + maxShow * 14);
-          }
-        }
-
         ctx.textAlign = 'left';
       }
 
@@ -4245,10 +5028,12 @@
         ctx.fillText('SHOP', W / 2, 36);
         ctx.shadowBlur = 0;
 
-        // Diamond balance
-        ctx.fillStyle = '#40c9a2';
+        // Balance: diamonds + coins
         ctx.font = '14px Courier New';
-        ctx.fillText('\u25C6 ' + totalDiamonds + ' diamonds', W / 2, 56);
+        ctx.fillStyle = '#40c9a2';
+        ctx.fillText('\u25C6 ' + totalDiamonds, W / 2 - 50, 56);
+        ctx.fillStyle = '#ffe066';
+        ctx.fillText('\u25CF ' + coinBank, W / 2 + 50, 56);
 
         // Scrollable item list
         const visCount = 6;
@@ -4285,9 +5070,14 @@
             ctx.fillStyle = '#888'; ctx.font = '12px Courier New';
             ctx.fillText(isSkin ? 'EQUIP' : 'OFF', W / 2 + 185, y + 4);
           } else {
-            ctx.fillStyle = totalDiamonds >= item.cost ? '#40c9a2' : '#664444';
-            ctx.font = 'bold 12px Courier New';
-            ctx.fillText('\u25C6 ' + item.cost, W / 2 + 185, y + 4);
+            const coinCost = item.cost * COINS_PER_DIAMOND;
+            const affordD = totalDiamonds >= item.cost;
+            const affordC = coinBank >= coinCost;
+            ctx.font = 'bold 11px Courier New';
+            ctx.fillStyle = affordD ? '#40c9a2' : '#664444';
+            ctx.fillText('\u25C6 ' + item.cost, W / 2 + 160, y + 4);
+            ctx.fillStyle = affordC ? '#ffe066' : '#665533';
+            ctx.fillText('\u25CF ' + coinCost, W / 2 + 210, y + 4);
           }
         }
 
@@ -4407,12 +5197,12 @@
         ctx.fillStyle = COL.text;
         ctx.font = '20px Courier New';
         ctx.fillText('Score: ' + score + '   \u25cf ' + coinCount + '   \u25C6 ' + diamondCount + '   \u2665\u00d7' + Math.max(0,lives), W / 2, H / 2);
-        // Revive option
-        const canRevive = totalDiamonds >= REVIVE_COST;
+        // Revive option (accepts diamonds OR coins)
+        const reviveOk = canRevive();
         ctx.font = 'bold 16px Courier New';
-        ctx.fillStyle = canRevive ? '#7ee8fa' : '#555';
-        const reviveLabel = isTouchDevice ? 'TAP HERE \u2014 REVIVE \u25C6 ' + REVIVE_COST
-                                          : 'R \u2014 REVIVE \u25C6 ' + REVIVE_COST;
+        ctx.fillStyle = reviveOk ? '#7ee8fa' : '#555';
+        const reviveLabel = (isTouchDevice ? 'TAP HERE \u2014 REVIVE ' : 'R \u2014 REVIVE ')
+                          + '\u25C6 ' + REVIVE_COST + ' / \u25CF ' + REVIVE_COIN_COST;
         ctx.fillText(reviveLabel, W / 2, H / 2 + 30);
         ctx.font = '16px Courier New';
         ctx.fillStyle = '#aaa';
@@ -4543,6 +5333,7 @@
       }
 
       ctx.restore(); // matches the save at the top of draw() for screen shake
+      drawOnlinePanel();
     }
 
     // ---- Loop ----
