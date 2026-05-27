@@ -241,20 +241,42 @@
     let diamondBags = [];
     let nextDiamondBagAt = 0; // score threshold for next rare bag spawn
 
+    // ---- Profile system: all coin/diamond/unlock state is namespaced per name ----
+    const PROFILE_KEYS = ['totalDiamonds', 'coinBank', 'upgrades', 'ownedUpgrades', 'activeSkin', 'ownedSkins', 'lastSpinDate', 'extraSpins', 'snakeHi', 'flappyHi', 'adminUnlocked', 'thorrenUnlocked'];
+    let currentProfile = localStorage.getItem('runner_currentProfile') || '';
+    if (!currentProfile) {
+      // First boot with profile system — migrate any old global keys to a default profile.
+      currentProfile = (localStorage.getItem('runner_playerName') || 'Player').trim() || 'Player';
+      for (const k of PROFILE_KEYS) {
+        const oldVal = localStorage.getItem('runner_' + k);
+        const newKey = 'runner_' + currentProfile + '_' + k;
+        if (oldVal !== null && localStorage.getItem(newKey) === null) {
+          localStorage.setItem(newKey, oldVal);
+        }
+      }
+      localStorage.setItem('runner_currentProfile', currentProfile);
+    }
+    let knownProfiles = JSON.parse(localStorage.getItem('runner_profiles') || '[]');
+    if (!knownProfiles.includes(currentProfile)) {
+      knownProfiles.push(currentProfile);
+      localStorage.setItem('runner_profiles', JSON.stringify(knownProfiles));
+    }
+    function pkey(k) { return 'runner_' + currentProfile + '_' + k; }
+
     // ---- Shop / persistent upgrades ----
     const REVIVE_COST = 15;
     const COINS_PER_DIAMOND = 5; // exchange rate when paying with coins instead of diamonds
     const ARCADE_REVIVE_COST = 3; // cheaper revive cost in snake/flappy
-    let totalDiamonds = parseInt(localStorage.getItem('runner_totalDiamonds') || '0');
-    let coinBank = parseInt(localStorage.getItem('runner_coinBank') || '0');
-    function saveCoinBank() { localStorage.setItem('runner_coinBank', coinBank); }
-    let upgrades = JSON.parse(localStorage.getItem('runner_upgrades') || '{}');
-    let ownedUpgrades = JSON.parse(localStorage.getItem('runner_ownedUpgrades') || 'null');
+    let totalDiamonds = parseInt(localStorage.getItem(pkey('totalDiamonds')) || '0');
+    let coinBank = parseInt(localStorage.getItem(pkey('coinBank')) || '0');
+    function saveCoinBank() { localStorage.setItem(pkey('coinBank'), coinBank); }
+    let upgrades = JSON.parse(localStorage.getItem(pkey('upgrades')) || '{}');
+    let ownedUpgrades = JSON.parse(localStorage.getItem(pkey('ownedUpgrades')) || 'null');
     if (!ownedUpgrades) {
       // Migration: existing players already own anything they have active.
       ownedUpgrades = {};
       for (const k in upgrades) if (upgrades[k]) ownedUpgrades[k] = true;
-      localStorage.setItem('runner_ownedUpgrades', JSON.stringify(ownedUpgrades));
+      localStorage.setItem(pkey('ownedUpgrades'), JSON.stringify(ownedUpgrades));
     }
     let shopSelection = 0;
     let shopReturnState = 'start';
@@ -262,8 +284,8 @@
     // ---- Daily Spin Wheel ----
     const WHEEL_SEGMENTS = [1, 2, 3, 5, 1, 10, 2, 25];
     const WHEEL_COLORS   = ['#ffe066','#7ee8fa','#a8dadc','#40c9a2','#ffe066','#f5a623','#7ee8fa','#e94560'];
-    let lastSpinDate = localStorage.getItem('runner_lastSpinDate') || '';
-    let extraSpins = parseInt(localStorage.getItem('runner_extraSpins') || '0');
+    let lastSpinDate = localStorage.getItem(pkey('lastSpinDate')) || '';
+    let extraSpins = parseInt(localStorage.getItem(pkey('extraSpins')) || '0');
     let wheelReturnState = 'start';
     let wheelAngle = 0, wheelStartAngle = 0, wheelTargetAngle = 0;
     let wheelSpinning = false, wheelSpinFrame = 0, wheelSpinDuration = 180;
@@ -281,23 +303,18 @@
     let playerId = localStorage.getItem('runner_playerId') ||
       (localStorage.setItem('runner_playerId', 'p' + Math.random().toString(36).slice(2, 11)),
        localStorage.getItem('runner_playerId'));
-    let playerName = localStorage.getItem('runner_playerName') || '';
+    let playerName = currentProfile;
     let onlinePlayers = []; // [{id, name, lastSeen}]
     const presenceEnabled = !!PRESENCE_URL;
 
     function setPlayerName(n) {
-      n = (n || '').trim().slice(0, 12);
+      n = (n || '').trim().slice(0, 16);
       if (!n) return;
       playerName = n;
       localStorage.setItem('runner_playerName', n);
     }
-    if (presenceEnabled && !playerName) {
-      try {
-        const n = window.prompt('Kies een naam (max 12 tekens):', '');
-        setPlayerName(n);
-      } catch (e) { /* prompt may be blocked */ }
-      if (!playerName) setPlayerName('Player' + Math.floor(1000 + Math.random() * 9000));
-    }
+    // Keep the legacy key in sync so the presence layer keeps working.
+    setPlayerName(currentProfile);
 
     async function presenceHeartbeat() {
       if (!presenceEnabled || !playerName) return;
@@ -336,8 +353,8 @@
     }
 
     // Skins
-    let activeSkin = localStorage.getItem('runner_activeSkin') || 'default';
-    let ownedSkins = JSON.parse(localStorage.getItem('runner_ownedSkins') || '["default"]');
+    let activeSkin = localStorage.getItem(pkey('activeSkin')) || 'default';
+    let ownedSkins = JSON.parse(localStorage.getItem(pkey('ownedSkins')) || '["default"]');
 
     const SKINS = {
       default: { body: '#a8dadc', visor: '#57b8e8', visorBg: '#1a1a2e', legs: '#7bbfbf', jump: '#a8dadc' },
@@ -386,15 +403,15 @@
     // Hidden skins — added to shop only when unlocked via a cheat code typed in the shop
     const ADMIN_SHOP_ITEM   = { key: 'admin',   name: 'ADMIN SKIN',   desc: 'Cap, shades & gold chain — exclusive', cost: 200, color: '#1e6ec7', type: 'skin' };
     const THORREN_SHOP_ITEM = { key: 'thorren', name: 'THORREN SKIN', desc: 'Thunder god — hammer, horns & lightning', cost: 250, color: '#80e8ff', type: 'skin' };
-    let adminSkinUnlocked   = localStorage.getItem('runner_adminUnlocked')   === '1';
-    let thorrenSkinUnlocked = localStorage.getItem('runner_thorrenUnlocked') === '1';
+    let adminSkinUnlocked   = localStorage.getItem(pkey('adminUnlocked'))   === '1';
+    let thorrenSkinUnlocked = localStorage.getItem(pkey('thorrenUnlocked')) === '1';
     if (adminSkinUnlocked)   SHOP_ITEMS.push(ADMIN_SHOP_ITEM);
     if (thorrenSkinUnlocked) SHOP_ITEMS.push(THORREN_SHOP_ITEM);
     let shopCheatBuf = '';
     function unlockAdminSkin() {
       if (adminSkinUnlocked) return;
       adminSkinUnlocked = true;
-      localStorage.setItem('runner_adminUnlocked', '1');
+      localStorage.setItem(pkey('adminUnlocked'), '1');
       SHOP_ITEMS.push(ADMIN_SHOP_ITEM);
       shopSelection = SHOP_ITEMS.length - 1;
       spawnFloatText(W / 2, H / 2 - 30, 'ADMIN SKIN UNLOCKED', '#ffe066');
@@ -402,19 +419,68 @@
     function unlockThorrenSkin() {
       if (thorrenSkinUnlocked) return;
       thorrenSkinUnlocked = true;
-      localStorage.setItem('runner_thorrenUnlocked', '1');
+      localStorage.setItem(pkey('thorrenUnlocked'), '1');
       SHOP_ITEMS.push(THORREN_SHOP_ITEM);
       shopSelection = SHOP_ITEMS.length - 1;
       spawnFloatText(W / 2, H / 2 - 30, 'THORREN SKIN UNLOCKED', '#80e8ff');
     }
 
-    function saveDiamonds() { localStorage.setItem('runner_totalDiamonds', totalDiamonds); }
-    function saveUpgrades() { localStorage.setItem('runner_upgrades', JSON.stringify(upgrades)); }
-    function saveOwnedUpgrades() { localStorage.setItem('runner_ownedUpgrades', JSON.stringify(ownedUpgrades)); }
-    function saveActiveSkin() { localStorage.setItem('runner_activeSkin', activeSkin); }
-    function saveOwnedSkins() { localStorage.setItem('runner_ownedSkins', JSON.stringify(ownedSkins)); }
-    function saveLastSpinDate() { localStorage.setItem('runner_lastSpinDate', lastSpinDate); }
-    function saveExtraSpins() { localStorage.setItem('runner_extraSpins', extraSpins); }
+    // ---- Profile loading + switching ----
+    function loadProfileVars() {
+      totalDiamonds = parseInt(localStorage.getItem(pkey('totalDiamonds')) || '0');
+      coinBank = parseInt(localStorage.getItem(pkey('coinBank')) || '0');
+      upgrades = JSON.parse(localStorage.getItem(pkey('upgrades')) || '{}');
+      ownedUpgrades = JSON.parse(localStorage.getItem(pkey('ownedUpgrades')) || 'null');
+      if (!ownedUpgrades) {
+        ownedUpgrades = {};
+        for (const k in upgrades) if (upgrades[k]) ownedUpgrades[k] = true;
+        localStorage.setItem(pkey('ownedUpgrades'), JSON.stringify(ownedUpgrades));
+      }
+      activeSkin = localStorage.getItem(pkey('activeSkin')) || 'default';
+      ownedSkins = JSON.parse(localStorage.getItem(pkey('ownedSkins')) || '["default"]');
+      lastSpinDate = localStorage.getItem(pkey('lastSpinDate')) || '';
+      extraSpins = parseInt(localStorage.getItem(pkey('extraSpins')) || '0');
+      snakeHi = parseInt(localStorage.getItem(pkey('snakeHi')) || '0');
+      flappyHi = parseInt(localStorage.getItem(pkey('flappyHi')) || '0');
+      adminSkinUnlocked = localStorage.getItem(pkey('adminUnlocked')) === '1';
+      thorrenSkinUnlocked = localStorage.getItem(pkey('thorrenUnlocked')) === '1';
+      // Re-sync hidden shop items to match the new profile's unlocks
+      for (let i = SHOP_ITEMS.length - 1; i >= 0; i--) {
+        const k = SHOP_ITEMS[i].key;
+        if (k === 'admin' || k === 'thorren') SHOP_ITEMS.splice(i, 1);
+      }
+      if (adminSkinUnlocked)   SHOP_ITEMS.push(ADMIN_SHOP_ITEM);
+      if (thorrenSkinUnlocked) SHOP_ITEMS.push(THORREN_SHOP_ITEM);
+      shopSelection = 0;
+    }
+    function changeProfile(newName) {
+      newName = (newName || '').trim().slice(0, 16);
+      if (!newName || newName === currentProfile) return false;
+      currentProfile = newName;
+      localStorage.setItem('runner_currentProfile', currentProfile);
+      if (!knownProfiles.includes(currentProfile)) {
+        knownProfiles.push(currentProfile);
+        localStorage.setItem('runner_profiles', JSON.stringify(knownProfiles));
+      }
+      setPlayerName(currentProfile);
+      loadProfileVars();
+      return true;
+    }
+    function promptChangeProfile() {
+      let n;
+      try { n = window.prompt('Profielnaam (1-16 tekens):', currentProfile); }
+      catch (e) { return; }
+      if (n === null) return; // cancel
+      changeProfile(n);
+    }
+
+    function saveDiamonds() { localStorage.setItem(pkey('totalDiamonds'), totalDiamonds); }
+    function saveUpgrades() { localStorage.setItem(pkey('upgrades'), JSON.stringify(upgrades)); }
+    function saveOwnedUpgrades() { localStorage.setItem(pkey('ownedUpgrades'), JSON.stringify(ownedUpgrades)); }
+    function saveActiveSkin() { localStorage.setItem(pkey('activeSkin'), activeSkin); }
+    function saveOwnedSkins() { localStorage.setItem(pkey('ownedSkins'), JSON.stringify(ownedSkins)); }
+    function saveLastSpinDate() { localStorage.setItem(pkey('lastSpinDate'), lastSpinDate); }
+    function saveExtraSpins() { localStorage.setItem(pkey('extraSpins'), extraSpins); }
 
     // ---- Snake game state ----
     const SNAKE_CELL = 20;
@@ -441,8 +507,8 @@
     let snakeTick = 0;
     let snakeTickRate = 8;
     let snakeStarted = false;
-    let snakeHi = parseInt(localStorage.getItem('runner_snakeHi') || '0');
-    function saveSnakeHi() { localStorage.setItem('runner_snakeHi', snakeHi); }
+    let snakeHi = parseInt(localStorage.getItem(pkey('snakeHi')) || '0');
+    function saveSnakeHi() { localStorage.setItem(pkey('snakeHi'), snakeHi); }
 
     // ---- Flappy bird state ----
     let flappyBird = { x: 200, y: H / 2, vy: 0, w: 28, h: 22, rot: 0 };
@@ -458,8 +524,15 @@
     let flappySlowTimer = 0;       // frames remaining of slow-mo
     let flappyShield = false;      // armed shield (absorbs next collision)
     let flappyInvincTimer = 0;     // brief invuln after shield is consumed
-    let flappyHi = parseInt(localStorage.getItem('runner_flappyHi') || '0');
-    function saveFlappyHi() { localStorage.setItem('runner_flappyHi', flappyHi); }
+    // Thorren-skin special action (runner only)
+    const THORREN_HAMMER_COIN_COST = 10;
+    const THORREN_HAMMER_COOLDOWN = 120; // 2s at 60fps
+    const THORREN_HAMMER_SWING = 24;     // animation frames
+    const THORREN_HAMMER_RANGE = 200;    // pixels forward of player
+    let thorrenHammerCooldown = 0;
+    let thorrenHammerSwingTimer = 0;
+    let flappyHi = parseInt(localStorage.getItem(pkey('flappyHi')) || '0');
+    function saveFlappyHi() { localStorage.setItem(pkey('flappyHi'), flappyHi); }
 
     function todayKey() {
       const d = new Date();
@@ -640,6 +713,8 @@
       invincible = 0;
       totalCoins = 0;
       nextLifeAt = 50;
+      thorrenHammerCooldown = 0;
+      thorrenHammerSwingTimer = 0;
       level = 1;
       levelUpTimer = 0;
       nextLevelScore = 5000;
@@ -800,6 +875,7 @@
     document.addEventListener('keydown', e => {
       // Home menu
       if (state === 'home') {
+        if (e.code === 'KeyN') { e.preventDefault(); promptChangeProfile(); return; }
         if (e.code === 'Digit1' || e.code === 'Numpad1') { e.preventDefault(); pickHomeCard(0); return; }
         if (e.code === 'Digit2' || e.code === 'Numpad2') { e.preventDefault(); pickHomeCard(1); return; }
         if (e.code === 'Digit3' || e.code === 'Numpad3') { e.preventDefault(); pickHomeCard(2); return; }
@@ -914,6 +990,10 @@
         state = 'dead';
         if (score > hiScore) hiScore = score;
       }
+      if (e.code === 'KeyF' && (state === 'running' || state === 'boss')) {
+        e.preventDefault();
+        activateThorrenHammer();
+      }
     });
 
     // ---- Input (touch / pointer gestures) ----
@@ -955,14 +1035,16 @@
 
       const cp = pageToCanvas(t.pageX, t.pageY);
 
-      // Home: tap a card
+      // Home: tap profile button or a card
       if (state === 'home') {
+        if (inRect(cp, homeProfileBtnRect())) { promptChangeProfile(); touchId = null; return; }
         const hit = homeHitTest(cp.x, cp.y);
         if (hit >= 0) { pickHomeCard(hit); touchId = null; }
         return;
       }
       // Snake
       if (state === 'snake' || state === 'snakeDead') {
+        if (inRect(cp, snakeHomeBtnRect())) { state = 'home'; touchId = null; return; }
         if (state === 'snake' && snakeStarted) {
           if (inRect(cp, snakeSlowBtnRect()))   { activateSnakePowerup(1); touchId = null; return; }
           if (inRect(cp, snakeShrinkBtnRect())) { activateSnakePowerup(2); touchId = null; return; }
@@ -980,6 +1062,7 @@
       }
       // Flappy
       if (state === 'flappy' || state === 'flappyDead') {
+        if (inRect(cp, flappyHomeBtnRect())) { state = 'home'; touchId = null; return; }
         if (state === 'flappy' && flappyStarted) {
           if (inRect(cp, flappySlowBtnRect()))   { activateFlappyPowerup(1); touchId = null; return; }
           if (inRect(cp, flappyShieldBtnRect())) { activateFlappyPowerup(2); touchId = null; return; }
@@ -995,6 +1078,10 @@
         flappyStarted = true;
         flapJump();
         return;
+      }
+      // Runner: Thorren hammer button (bottom-right) — only when wearing the skin
+      if ((state === 'running' || state === 'boss') && activeSkin === 'thorren') {
+        if (inRect(cp, thorrenHammerBtnRect())) { activateThorrenHammer(); touchId = null; return; }
       }
 
       // Wheel: handle tap on wheel or close strip
@@ -1130,11 +1217,13 @@
       const cp = pageToCanvas(e.pageX, e.pageY);
 
       if (state === 'home') {
+        if (inRect(cp, homeProfileBtnRect())) { promptChangeProfile(); return; }
         const hit = homeHitTest(cp.x, cp.y);
         if (hit >= 0) pickHomeCard(hit);
         return;
       }
       if (state === 'snake' || state === 'snakeDead') {
+        if (inRect(cp, snakeHomeBtnRect())) { state = 'home'; return; }
         if (state === 'snake' && snakeStarted) {
           if (inRect(cp, snakeSlowBtnRect()))   { activateSnakePowerup(1); return; }
           if (inRect(cp, snakeShrinkBtnRect())) { activateSnakePowerup(2); return; }
@@ -1151,6 +1240,7 @@
         return;
       }
       if (state === 'flappy' || state === 'flappyDead') {
+        if (inRect(cp, flappyHomeBtnRect())) { state = 'home'; return; }
         if (state === 'flappy' && flappyStarted) {
           if (inRect(cp, flappySlowBtnRect()))   { activateFlappyPowerup(1); return; }
           if (inRect(cp, flappyShieldBtnRect())) { activateFlappyPowerup(2); return; }
@@ -1166,6 +1256,10 @@
         flappyStarted = true;
         flapJump();
         return;
+      }
+      // Runner: Thorren hammer button (bottom-right)
+      if ((state === 'running' || state === 'boss') && activeSkin === 'thorren') {
+        if (inRect(cp, thorrenHammerBtnRect())) { activateThorrenHammer(); return; }
       }
 
       if (state === 'wheel') {
@@ -2235,40 +2329,42 @@
           ctx.beginPath(); ctx.arc(0, -ph - 4, 1.6, 0, Math.PI * 2); ctx.fill();
           ctx.shadowBlur = 0;
 
-          // Floating hammer above the head — slowly bobbing
-          const hammerY = -ph - 18 + Math.sin(frame * 0.09) * 2;
-          const hammerR = Math.sin(frame * 0.06) * 0.18;
-          ctx.save();
-          ctx.translate(2, hammerY);
-          ctx.rotate(hammerR);
-          // Handle
-          ctx.fillStyle = '#5a3018';
-          ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1;
-          ctx.fillRect(-1.2, -2, 2.4, 13);
-          ctx.strokeRect(-1.2, -2, 2.4, 13);
-          // Pommel
-          ctx.fillStyle = '#c89a30';
-          ctx.beginPath(); ctx.arc(0, 11, 1.6, 0, Math.PI * 2); ctx.fill();
-          // Head
-          ctx.fillStyle = '#9aa0a8';
-          ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1;
-          roundRect(-7, -6, 14, 7, 1.5);
-          ctx.fill(); ctx.stroke();
-          // Highlight strip
-          ctx.fillStyle = '#cdd2d8';
-          ctx.fillRect(-6, -5, 12, 1.2);
-          // Electric arcs zapping from head
-          ctx.strokeStyle = `rgba(180,235,255,${0.55 + Math.sin(frame * 0.32) * 0.4})`;
-          ctx.lineWidth = 1.3;
-          ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 5;
-          ctx.beginPath();
-          ctx.moveTo(-6, -3); ctx.lineTo(-3, -1); ctx.lineTo(-7, 2); ctx.lineTo(-2, 4);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(6, -4); ctx.lineTo(3, -1); ctx.lineTo(7, 2); ctx.lineTo(3, 5);
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-          ctx.restore();
+          // Floating hammer above the head — hidden during the swing so it looks like the same hammer
+          if (thorrenHammerSwingTimer <= 0) {
+            const hammerY = -ph - 18 + Math.sin(frame * 0.09) * 2;
+            const hammerR = Math.sin(frame * 0.06) * 0.18;
+            ctx.save();
+            ctx.translate(2, hammerY);
+            ctx.rotate(hammerR);
+            // Handle
+            ctx.fillStyle = '#5a3018';
+            ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1;
+            ctx.fillRect(-1.2, -2, 2.4, 13);
+            ctx.strokeRect(-1.2, -2, 2.4, 13);
+            // Pommel
+            ctx.fillStyle = '#c89a30';
+            ctx.beginPath(); ctx.arc(0, 11, 1.6, 0, Math.PI * 2); ctx.fill();
+            // Head
+            ctx.fillStyle = '#9aa0a8';
+            ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1;
+            roundRect(-7, -6, 14, 7, 1.5);
+            ctx.fill(); ctx.stroke();
+            // Highlight strip
+            ctx.fillStyle = '#cdd2d8';
+            ctx.fillRect(-6, -5, 12, 1.2);
+            // Electric arcs zapping from head
+            ctx.strokeStyle = `rgba(180,235,255,${0.55 + Math.sin(frame * 0.32) * 0.4})`;
+            ctx.lineWidth = 1.3;
+            ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 5;
+            ctx.beginPath();
+            ctx.moveTo(-6, -3); ctx.lineTo(-3, -1); ctx.lineTo(-7, 2); ctx.lineTo(-2, 4);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(6, -4); ctx.lineTo(3, -1); ctx.lineTo(7, 2); ctx.lineTo(3, 5);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.restore();
+          }
 
           // Trailing energy tassels at the body's bottom edge (the "skirt" in the sketch)
           for (let i = 0; i < 5; i++) {
@@ -2905,11 +3001,52 @@
     }
 
     // Arcade-game button rects (also used for hit-tests)
+    function snakeHomeBtnRect()    { return { x: 4,           y: 4, w: 60,  h: 18 }; }
     function snakeSlowBtnRect()    { return { x: W / 2 - 140, y: 4, w: 110, h: 18 }; }
     function snakeShrinkBtnRect()  { return { x: W / 2 + 10,  y: 4, w: 130, h: 18 }; }
-    function flappySlowBtnRect()   { return { x: 8,           y: 4, w: 110, h: 20 }; }
+    function flappyHomeBtnRect()   { return { x: 4,           y: 4, w: 60,  h: 20 }; }
+    function flappySlowBtnRect()   { return { x: 70,          y: 4, w: 110, h: 20 }; }
     function flappyShieldBtnRect() { return { x: W - 118,     y: 4, w: 110, h: 20 }; }
+    function thorrenHammerBtnRect() { return { x: W - 70, y: H - 60, w: 60, h: 44 }; }
     function inRect(cp, r) { return cp.x >= r.x && cp.x <= r.x + r.w && cp.y >= r.y && cp.y <= r.y + r.h; }
+
+    function activateThorrenHammer() {
+      if (state !== 'running' && state !== 'boss') return;
+      if (activeSkin !== 'thorren') return;
+      if (thorrenHammerCooldown > 0 || thorrenHammerSwingTimer > 0) return;
+      if (!payArcadeCoinCost(THORREN_HAMMER_COIN_COST)) return;
+      thorrenHammerSwingTimer = THORREN_HAMMER_SWING;
+      thorrenHammerCooldown = THORREN_HAMMER_COOLDOWN;
+      // Smash obstacles within range in front of the player
+      const playerCx = player.x + player.w / 2;
+      let killed = 0;
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const ob = obstacles[i];
+        if (ob.x + ob.w >= player.x && ob.x <= playerCx + THORREN_HAMMER_RANGE) {
+          const ocx = ob.x + ob.w / 2;
+          const ocy = ob.y - ob.h / 2;
+          spawnParticles(ocx, ocy, '#f5a623', 16);
+          spawnParticles(ocx, ocy, '#a0d8ff', 12);
+          spawnParticles(ocx, ocy, '#ffffff', 6);
+          obstacles.splice(i, 1);
+          score += 50;
+          killed++;
+        }
+      }
+      if (killed > 0) {
+        spawnFloatText(player.x + 80, player.y + 4, 'SMASH ×' + killed, '#a0d8ff');
+      }
+      // Damage the boss if its bulk is in range (1 HP per swing)
+      if (state === 'boss' && boss && !boss.defeated) {
+        const bossCx = boss.x + boss.w / 2;
+        if (bossCx > player.x - 20 && bossCx < playerCx + THORREN_HAMMER_RANGE + 80) {
+          boss.hp -= 1;
+          boss.hurtTimer = 20;
+          spawnParticles(boss.x + boss.w / 2, boss.y - boss.h / 2, '#a0d8ff', 22);
+        }
+      }
+      triggerShake(killed > 0 ? 10 : 6, 14);
+    }
 
     // Shared revive helper for snake/flappy mini-games
     const ARCADE_REVIVE_COIN_COST = ARCADE_REVIVE_COST * COINS_PER_DIAMOND;
@@ -3176,16 +3313,25 @@
         }
       }
       ctx.shadowBlur = 0;
-      // HUD
+      // HUD — HOME button (top-left)
+      const homeR = snakeHomeBtnRect();
+      ctx.fillStyle = 'rgba(126,232,250,0.10)';
+      roundRect(homeR.x, homeR.y, homeR.w, homeR.h, 3); ctx.fill();
+      ctx.strokeStyle = '#7ee8fa'; ctx.lineWidth = 1;
+      roundRect(homeR.x, homeR.y, homeR.w, homeR.h, 3); ctx.stroke();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 11px Courier New';
+      ctx.fillText('← HOME', homeR.x + homeR.w / 2, homeR.y + homeR.h / 2);
+      // Bank stacked next to HOME
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 14px Courier New';
-      ctx.fillText('SCORE: ' + snakeScore, 8, 6);
-      // Coin + diamond bank
-      ctx.font = 'bold 12px Courier New';
+      ctx.font = 'bold 11px Courier New';
       ctx.fillStyle = '#ffe066';
-      ctx.fillText('● ' + coinBank, 140, 8);
+      ctx.fillText('● ' + coinBank, 70, 3);
       ctx.fillStyle = '#40c9a2';
-      ctx.fillText('◆ ' + totalDiamonds, 220, 8);
+      ctx.fillText('◆ ' + totalDiamonds, 70, 14);
+      // Score
+      ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 14px Courier New';
+      ctx.fillText('SCORE: ' + snakeScore, 140, 6);
       ctx.textAlign = 'right';
       ctx.fillStyle = '#f5a623'; ctx.font = 'bold 14px Courier New';
       ctx.fillText('BEST: ' + snakeHi, W - 8, 6);
@@ -3478,6 +3624,17 @@
       ctx.beginPath();
       ctx.moveTo(12, 0); ctx.lineTo(20, -2); ctx.lineTo(20, 3); ctx.closePath(); ctx.fill();
       ctx.restore();
+      // HUD HOME button (top-left)
+      {
+        const homeR = flappyHomeBtnRect();
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        roundRect(homeR.x, homeR.y, homeR.w, homeR.h, 3); ctx.fill();
+        ctx.strokeStyle = '#7ee8fa'; ctx.lineWidth = 1;
+        roundRect(homeR.x, homeR.y, homeR.w, homeR.h, 3); ctx.stroke();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 11px Courier New';
+        ctx.fillText('← HOME', homeR.x + homeR.w / 2, homeR.y + homeR.h / 2);
+      }
       // HUD score
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
       ctx.fillStyle = '#fff'; ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
@@ -3619,6 +3776,7 @@
       ctx.restore();
     }
 
+    function homeProfileBtnRect() { return { x: 8, y: 8, w: 220, h: 26 }; }
     function drawHome() {
       // background gradient
       const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -3630,6 +3788,21 @@
         ctx.fillStyle = `rgba(200,220,255,${0.3 + Math.sin(frame * 0.02 + s.x) * 0.2})`;
         ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
       }
+      // profile button (top-left)
+      const pr = homeProfileBtnRect();
+      ctx.fillStyle = 'rgba(126,232,250,0.10)';
+      roundRect(pr.x, pr.y, pr.w, pr.h, 5); ctx.fill();
+      ctx.strokeStyle = '#7ee8fa'; ctx.lineWidth = 1;
+      roundRect(pr.x, pr.y, pr.w, pr.h, 5); ctx.stroke();
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.font = 'bold 12px Courier New';
+      ctx.fillStyle = '#7ee8fa';
+      ctx.fillText('PROFILE:', pr.x + 8, pr.y + pr.h / 2);
+      ctx.fillStyle = '#ffe066';
+      ctx.fillText(currentProfile, pr.x + 78, pr.y + pr.h / 2);
+      ctx.fillStyle = '#aaa'; ctx.font = '11px Courier New';
+      ctx.fillText(isTouchDevice ? '[TAP TO CHANGE]' : '[N]', pr.x + pr.w - 8 - ctx.measureText(isTouchDevice ? '[TAP TO CHANGE]' : '[N]').width, pr.y + pr.h / 2);
+      ctx.textBaseline = 'alphabetic';
       // title
       ctx.textAlign = 'center';
       ctx.shadowColor = '#7ee8fa'; ctx.shadowBlur = 18;
@@ -3836,6 +4009,8 @@
 
       // Invincibility countdown
       if (invincible > 0) invincible--;
+      if (thorrenHammerCooldown > 0) thorrenHammerCooldown--;
+      if (thorrenHammerSwingTimer > 0) thorrenHammerSwingTimer--;
       if (screenShake > 0) { screenShake--; if (screenShake === 0) shakeMag = 0; }
 
       // Slide timer
@@ -4878,6 +5053,108 @@
         if (invincible <= 0 || Math.floor(invincible / 6) % 2 === 0) {
           drawPlayer();
         }
+      }
+
+      // Thorren hammer swing animation
+      if (thorrenHammerSwingTimer > 0 && activeSkin === 'thorren') {
+        const t = 1 - (thorrenHammerSwingTimer / THORREN_HAMMER_SWING); // 0 → 1
+        // Arc from -110° (up-back) to +90° (down-forward)
+        const startAng = -Math.PI * 0.6;
+        const endAng = Math.PI * 0.55;
+        const angle = startAng + (endAng - startAng) * t;
+        const px = player.x + player.w / 2;
+        const py = player.y + 10;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(angle);
+        // Handle
+        ctx.fillStyle = '#5a3018';
+        ctx.strokeStyle = '#2a1808'; ctx.lineWidth = 1.5;
+        ctx.fillRect(-2, 0, 4, 38);
+        ctx.strokeRect(-2, 0, 4, 38);
+        // Pommel
+        ctx.fillStyle = '#c89a30';
+        ctx.beginPath(); ctx.arc(0, -3, 3, 0, Math.PI * 2); ctx.fill();
+        // Hammer head
+        ctx.fillStyle = '#9aa0a8';
+        ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1.5;
+        roundRect(-16, 36, 32, 16, 3);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#cdd2d8';
+        ctx.fillRect(-14, 38, 28, 3);
+        // Electric arcs trailing the head
+        ctx.strokeStyle = `rgba(200,235,255,${0.7 + Math.sin(frame * 0.4) * 0.3})`;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 10;
+        for (let i = 0; i < 4; i++) {
+          const lx = -14 + i * 9;
+          ctx.beginPath();
+          ctx.moveTo(lx, 52);
+          ctx.lineTo(lx + 3, 58);
+          ctx.lineTo(lx - 2, 62);
+          ctx.lineTo(lx + 2, 68);
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        // Shockwave at impact (last third of the swing)
+        if (t > 0.6) {
+          const s = (t - 0.6) / 0.4; // 0 → 1
+          const r = 30 + s * 90;
+          ctx.strokeStyle = `rgba(160,216,255,${(1 - s) * 0.8})`;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(player.x + player.w + 80, player.y + player.h / 2, r, -Math.PI * 0.6, Math.PI * 0.6);
+          ctx.stroke();
+          // Lightning crackles in the swing path
+          for (let i = 0; i < 5; i++) {
+            const lx = player.x + player.w + 20 + i * 35;
+            const ly = player.y + player.h / 2 + (Math.random() - 0.5) * 30;
+            ctx.strokeStyle = `rgba(220,240,255,${(1 - s) * 0.9})`;
+            ctx.lineWidth = 1.5;
+            ctx.shadowColor = '#80c8ff'; ctx.shadowBlur = 6;
+            ctx.beginPath();
+            ctx.moveTo(lx, ly - 8);
+            ctx.lineTo(lx + 3, ly - 2);
+            ctx.lineTo(lx - 2, ly + 2);
+            ctx.lineTo(lx + 3, ly + 8);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+          }
+        }
+      }
+
+      // Thorren hammer button (touch-friendly, bottom-right) — only when wearing the skin
+      if ((state === 'running' || state === 'boss') && activeSkin === 'thorren') {
+        const r = thorrenHammerBtnRect();
+        const ready = thorrenHammerCooldown <= 0 && thorrenHammerSwingTimer <= 0 && canAffordArcadeCoin(THORREN_HAMMER_COIN_COST);
+        ctx.fillStyle = ready ? 'rgba(128,200,255,0.30)' : 'rgba(60,60,60,0.45)';
+        roundRect(r.x, r.y, r.w, r.h, 5); ctx.fill();
+        ctx.strokeStyle = ready ? '#a0d8ff' : '#444'; ctx.lineWidth = 1.5;
+        roundRect(r.x, r.y, r.w, r.h, 5); ctx.stroke();
+        // Mini hammer icon
+        ctx.save();
+        ctx.translate(r.x + r.w / 2, r.y + r.h / 2 - 4);
+        ctx.fillStyle = '#5a3018';
+        ctx.fillRect(-1.5, -3, 3, 16);
+        ctx.fillStyle = '#9aa0a8'; ctx.strokeStyle = '#3a3e44'; ctx.lineWidth = 1;
+        roundRect(-9, -8, 18, 7, 1.5); ctx.fill(); ctx.stroke();
+        ctx.restore();
+        // Cost / cooldown indicator
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.font = 'bold 10px Courier New';
+        if (thorrenHammerCooldown > 0) {
+          ctx.fillStyle = '#888';
+          ctx.fillText((thorrenHammerCooldown / 60).toFixed(1) + 's', r.x + r.w / 2, r.y + r.h - 14);
+          // Cooldown progress strip
+          const pct = 1 - thorrenHammerCooldown / THORREN_HAMMER_COOLDOWN;
+          ctx.fillStyle = 'rgba(160,216,255,0.5)';
+          ctx.fillRect(r.x + 2, r.y + r.h - 3, (r.w - 4) * pct, 2);
+        } else {
+          ctx.fillStyle = ready ? '#a0d8ff' : '#666';
+          ctx.fillText('[F] ●' + THORREN_HAMMER_COIN_COST, r.x + r.w / 2, r.y + r.h - 14);
+        }
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
       }
 
       // Portal animation
